@@ -1,0 +1,2 @@
+# XIAO-ESP32S3-MJPEG2SD
+Arduino sketch for XIAO ESP32-S3 Sense based on ESP32-CAM_MJPEG2SD
