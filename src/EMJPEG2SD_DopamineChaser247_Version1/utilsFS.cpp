@@ -485,3 +485,8 @@ void uploadToComputer(const char* filepath) {
   free(buffer);
   http.end();
 }
+void uploadRecordings() {
+    // Placeholder implementation
+    Serial.println("uploadRecordings() called - placeholder");
+    // Add your upload logic here later
+}
