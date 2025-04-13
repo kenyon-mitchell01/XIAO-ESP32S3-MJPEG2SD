@@ -870,7 +870,7 @@ static esp_err_t changeXCLK(camera_config_t config) {
   delay(200); // base on datasheet, it needs < 300 ms for configuration to settle in. we just put 200ms. it doesnt hurt.
   return res;
 }
-
+//Grok aided and recommended modification to add debugging function statements to Camera initiation 04/13/25
 bool prepCam() {
   // initialise camera depending on model and board
   if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0])) 
@@ -922,20 +922,24 @@ bool prepCam() {
   config.frame_size = maxFS;
   config.jpeg_quality = 10;
   config.fb_count = FB_CNT;
-  config.sccb_i2c_port = 0;// using I2C 0. to be sure what port we are using.
+  config.sccb_i2c_port = 0; // using I2C 0. to be sure what port we are using.
 
 #if defined(CAMERA_MODEL_ESP_EYE)
   pinMode(13, INPUT_PULLUP);
   pinMode(14, INPUT_PULLUP);
 #endif
-
-  // camera init
+  // Camera init
+  Serial.println("Attempting to initialize OV2640 camera..."); // Debug message before init
   esp_err_t err = ESP_FAIL;
   uint8_t retries = 2;
   while (retries && err != ESP_OK) {
     err = esp_camera_init(&config);
-    if (err == ESP_OK) err = changeXCLK(config);
+    if (err == ESP_OK) {
+      err = changeXCLK(config);
+      Serial.println("Camera clock adjusted successfully"); // Debug message after clock adjustment
+    }
     if (err != ESP_OK) {
+      Serial.printf("Camera init failed with error 0x%x on attempt %d\n", err, 3 - retries); // Debug message on failure
       // power cycle the camera, provided pin is connected
 #if (defined(PWDN_GPIO_NUM)) && (PWDN_GPIO_NUM > -1) // both checks are needed. if send -1 to digitalWrite, it can cause crash.
       digitalWrite(PWDN_GPIO_NUM, 1);
@@ -949,25 +953,29 @@ bool prepCam() {
     }
   } 
 
-
-  if (err != ESP_OK) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Camera init error 0x%x:%s on %s", err, espErrMsg(err), CAM_BOARD);
-  else {
+  if (err != ESP_OK) {
+    snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Camera init error 0x%x:%s on %s", err, espErrMsg(err), CAM_BOARD);
+    Serial.println(startupFailure); // Debug message on final failure
+  } else {
+    Serial.println("OV2640 camera initialized successfully"); // Debug message on success
     sensor_t* s = esp_camera_sensor_get();
-    if (s == NULL) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to access camera on %s", CAM_BOARD);
-    else {
+    if (s == NULL) {
+      snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to access camera on %s", CAM_BOARD);
+      Serial.println(startupFailure); // Debug message on sensor failure
+    } else {
       switch (s->id.PID) {
         case (OV2640_PID):
           strcpy(camModel, "OV2640");
-        break;
+          break;
         case (OV3660_PID):
           strcpy(camModel, "OV3660");
-        break;
+          break;
         case (OV5640_PID):
           strcpy(camModel, "OV5640");
-        break;
+          break;
         default:
           strcpy(camModel, "Other");
-        break;
+          break;
       }
   
       // set frame size to configured value
@@ -978,24 +986,24 @@ bool prepCam() {
       // model specific corrections
       if (s->id.PID == OV3660_PID) {
         // initial sensors are flipped vertically and colors are a bit saturated
-        s->set_vflip(s, 1);//flip it back
-        s->set_brightness(s, 1);//up the brightness just a bit
-        s->set_saturation(s, -2);//lower the saturation
+        s->set_vflip(s, 1); // flip it back
+        s->set_brightness(s, 1); // up the brightness just a bit
+        s->set_saturation(s, -2); // lower the saturation
       }
   
-  #if defined(CAMERA_MODEL_M5STACK_WIDE)
+      #if defined(CAMERA_MODEL_M5STACK_WIDE)
       s->set_vflip(s, 1);
       s->set_hmirror(s, 1);
-  #endif
+      #endif
   
-  #if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
+      #if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
       s->set_vflip(s, 1);
       s->set_hmirror(s, 1);
-  #endif
+      #endif
   
-  #if defined(CAMERA_MODEL_ESP32S3_EYE)
+      #if defined(CAMERA_MODEL_ESP32S3_EYE)
       s->set_vflip(s, 1);
-  #endif
+      #endif
       res = true;
     }
   }
@@ -1005,6 +1013,7 @@ bool prepCam() {
     if (fb == NULL) {
       // usually a camera hardware / ribbon cable fault
       snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to get camera frame - check camera hardware"); 
+      Serial.println(startupFailure); // Debug message on frame buffer failure
     } else {
       esp_camera_fb_return(fb);
       fb = NULL;
@@ -1015,3 +1024,149 @@ bool prepCam() {
   debugMemory("prepCam");
   return res;
 }
+//Original Camera Initialization Code
+//J.I.C.*bool prepCam() {
+  // initialise camera depending on model and board
+  //J.I.C.*if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0])) 
+  //J.I.C.*  LOG_ERR("framesize_t entries %d != frameData entries %d", FRAMESIZE_INVALID, sizeof(frameData) / sizeof(frameData[0]));
+  //J.I.C.*if (!camPower()) return false;
+//J.I.C.*#if INCLUDE_I2C
+  //J.I.C.*if (shareI2C(SIOD_GPIO_NUM, SIOC_GPIO_NUM)) { 
+    // if shared, set camera to use shared
+    //J.I.C.*siodGpio = -1;
+    //J.I.C.*siocGpio = -1;
+  //J.I.C.*}
+//J.I.C.*#endif
+
+  //J.I.C.*bool res = false;
+  // buffer sizing depends on psram size (2M, 4M or 8M)
+  // FRAMESIZE_QSXGA = 1MB, FRAMESIZE_UXGA = 375KB (as JPEG)
+  //J.I.C.*maxFS = FRAMESIZE_SVGA; // 2M
+ //J.I.C.*if (ESP.getPsramSize() > 5 * ONEMEG) maxFS = FRAMESIZE_QSXGA; // 8M
+ //J.I.C.*else if (ESP.getPsramSize() > 3 * ONEMEG) maxFS = FRAMESIZE_UXGA; // 4M
+  // define buffer size depending on maximum frame size available, esp32-camera/driver/cam_hal.c: cam_obj->recv_size
+  //J.I.C.*maxFrameBuffSize = maxAlertBuffSize = frameData[maxFS].frameWidth * frameData[maxFS].frameHeight / 5; 
+  //J.I.C.*LOG_INF("Max frame size for %s PSRAM is %s", fmtSize(ESP.getPsramSize()), frameData[maxFS].frameSizeStr);
+
+  // configure camera
+  //J.I.C.*camera_config_t config;
+  //J.I.C.*config.ledc_channel = LEDC_CHANNEL_1;
+  //J.I.C.*config.ledc_timer = LEDC_TIMER_1;
+  //J.I.C.*config.pin_d0 = Y2_GPIO_NUM;
+  //J.I.C.*config.pin_d1 = Y3_GPIO_NUM;
+  //J.I.C.*config.pin_d2 = Y4_GPIO_NUM;
+  //J.I.C.*config.pin_d3 = Y5_GPIO_NUM;
+  //J.I.C.*config.pin_d4 = Y6_GPIO_NUM;
+  //J.I.C.*config.pin_d5 = Y7_GPIO_NUM;
+  //J.I.C.*config.pin_d6 = Y8_GPIO_NUM;
+  //J.I.C.*config.pin_d7 = Y9_GPIO_NUM;
+  //J.I.C.*config.pin_xclk = XCLK_GPIO_NUM;
+  //J.I.C.*config.pin_pclk = PCLK_GPIO_NUM;
+  //J.I.C.*config.pin_vsync = VSYNC_GPIO_NUM;
+  //J.I.C.*config.pin_href = HREF_GPIO_NUM;
+  //J.I.C.*config.pin_sccb_sda = siodGpio;
+  //J.I.C.*config.pin_sccb_scl = siocGpio;
+  //J.I.C.*config.pin_pwdn = PWDN_GPIO_NUM;
+  //J.I.C.*config.pin_reset = RESET_GPIO_NUM;
+  //J.I.C.*config.xclk_freq_hz = xclkMhz * OneMHz;
+  //J.I.C.*config.pixel_format = PIXFORMAT_JPEG;
+  //J.I.C.*config.grab_mode = CAMERA_GRAB_LATEST;
+  // init with high specs to pre-allocate larger buffers
+  //J.I.C.*config.fb_location = CAMERA_FB_IN_PSRAM;
+  //J.I.C.*config.frame_size = maxFS;
+  //J.I.C.*config.jpeg_quality = 10;
+  //J.I.C.*config.fb_count = FB_CNT;
+  //J.I.C.*config.sccb_i2c_port = 0;// using I2C 0. to be sure what port we are using.
+
+//J.I.C.*#if defined(CAMERA_MODEL_ESP_EYE)
+  //J.I.C.*pinMode(13, INPUT_PULLUP);
+  //J.I.C.*pinMode(14, INPUT_PULLUP);
+//J.I.C.*#endif
+
+  // Camera init
+//J.I.C.*Serial.println("OV2640 camera initialized successfully");
+  //J.I.C.*esp_err_t err = ESP_FAIL;
+  //J.I.C.*uint8_t retries = 2;
+  //J.I.C.*while (retries && err != ESP_OK) {
+    //J.I.C.*err = esp_camera_init(&config);
+    //J.I.C.*if (err == ESP_OK) err = changeXCLK(config);
+    //J.I.C.*if (err != ESP_OK) {
+      // power cycle the camera, provided pin is connected
+//J.I.C.*#if (defined(PWDN_GPIO_NUM)) && (PWDN_GPIO_NUM > -1) // both checks are needed. if send -1 to digitalWrite, it can cause crash.
+      //J.I.C.*digitalWrite(PWDN_GPIO_NUM, 1);
+      //J.I.C.*delay(100);
+      //J.I.C.*digitalWrite(PWDN_GPIO_NUM, 0); 
+      //J.I.C.*delay(100);
+//J.I.C.*#else
+      //J.I.C.*delay(200);
+//J.I.C.*#endif
+      //J.I.C.*retries--;
+    //J.I.C.*}
+  //J.I.C.*} 
+
+
+  //J.I.C.*if (err != ESP_OK) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Camera init error 0x%x:%s on %s", err, espErrMsg(err), CAM_BOARD);
+  //J.I.C.*else {
+    //J.I.C.*sensor_t* s = esp_camera_sensor_get();
+    //J.I.C.*if (s == NULL) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to access camera on %s", CAM_BOARD);
+    //J.I.C.*else {
+      //J.I.C.*switch (s->id.PID) {
+        //J.I.C.*case (OV2640_PID):
+          //J.I.C.*strcpy(camModel, "OV2640");
+        //J.I.C.*break;
+        //J.I.C.*case (OV3660_PID):
+          //J.I.C.*strcpy(camModel, "OV3660");
+        //J.I.C.*break;
+        //J.I.C.*case (OV5640_PID):
+          //J.I.C.*strcpy(camModel, "OV5640");
+        //J.I.C.*break;
+        //J.I.C.*default:
+          //J.I.C.*strcpy(camModel, "Other");
+        //J.I.C.*break;
+      //J.I.C.*}
+  
+      // set frame size to configured value
+      //J.I.C.*char fsizePtr[4];
+      //J.I.C.*if (retrieveConfigVal("framesize", fsizePtr)) s->set_framesize(s, (framesize_t)(atoi(fsizePtr)));
+      //J.I.C.*else s->set_framesize(s, FRAMESIZE_SVGA);
+
+      // model specific corrections
+      //J.I.C.*if (s->id.PID == OV3660_PID) {
+        // initial sensors are flipped vertically and colors are a bit saturated
+        //J.I.C.*s->set_vflip(s, 1);//flip it back
+        //J.I.C.*s->set_brightness(s, 1);//up the brightness just a bit
+        //J.I.C.*s->set_saturation(s, -2);//lower the saturation
+      //J.I.C.*}
+  
+  //J.I.C.*#if defined(CAMERA_MODEL_M5STACK_WIDE)
+      //J.I.C.*s->set_vflip(s, 1);
+      //J.I.C.*s->set_hmirror(s, 1);
+  //J.I.C.*#endif
+  
+  //J.I.C.*#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
+      //J.I.C.*s->set_vflip(s, 1);
+      //J.I.C.*s->set_hmirror(s, 1);
+  //J.I.C.*#endif
+  
+  //J.I.C.*#if defined(CAMERA_MODEL_ESP32S3_EYE)
+      //J.I.C.*s->set_vflip(s, 1);
+  //J.I.C.*#endif
+      //J.I.C.*res = true;
+    //J.I.C.*}
+  //J.I.C.*}
+  // check that camera data is accessible
+  //J.I.C.*if (res) {
+    //J.I.C.*camera_fb_t* fb = esp_camera_fb_get();
+    //J.I.C.*if (fb == NULL) {
+      // usually a camera hardware / ribbon cable fault
+      //J.I.C.*snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to get camera frame - check camera hardware"); 
+    //J.I.C.*} else {
+      //J.I.C.*esp_camera_fb_return(fb);
+      //J.I.C.*fb = NULL;
+      //J.I.C.*res = true;
+      //J.I.C.*LOG_INF("Camera model %s ready @ %uMHz", camModel, xclkMhz); 
+    //J.I.C.*}
+  //J.I.C.*}
+  //J.I.C.*debugMemory("prepCam");
+  //J.I.C.*return res;
+//J.I.C.*}

@@ -44,7 +44,46 @@ static void infoSD() {
   }
 #endif
 }
-
+//Original SD initialization Code
+//J.I.C.*static bool prepSD_MMC() {
+  //J.I.C.*bool res = false;
+//J.I.C.*#if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)
+  //J.I.C.*if (psramFound()) heap_caps_malloc_extmem_enable(MIN_RAM); // small number to force vector into psram
+  //J.I.C.*fileVec.reserve(1000);
+  //J.I.C.*if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
+//J.I.C.*#if CONFIG_IDF_TARGET_ESP32S3
+//J.I.C.*#if !defined(SD_MMC_CLK)
+  //J.I.C.*LOG_WRN("SD card pins not defined");
+  //J.I.C.*return false;
+//J.I.C.*#else
+ //J.I.C.*#if defined(SD_MMC_D1)
+  // assume 4 bit mode
+  //J.I.C.*SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
+  //J.I.C.*use1bitMode = false;
+ //J.I.C.*#else
+  // assume 1 bit mode
+  //J.I.C.*SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+ //J.I.C.*#endif
+//J.I.C.*#endif
+//J.I.C.*#endif
+  
+  //J.I.C.*res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
+//J.I.C.*#if defined(CAMERA_MODEL_AI_THINKER)
+  //J.I.C.*pinMode(4, OUTPUT);
+  //J.I.C.*digitalWrite(4, 0); // set lamp pin fully off as sd_mmc library still initialises pin 4 in 1 line mode
+//J.I.C.*#endif 
+  //J.I.C.*if (res) {
+    //J.I.C.*fp.mkdir(DATA_DIR);
+    //J.I.C.*infoSD();
+    //J.I.C.*res = true;
+  //J.I.C.*} else {
+    //J.I.C.*LOG_WRN("SD card mount failed");
+    //J.I.C.*res = false;
+  //J.I.C.*}
+//J.I.C.*#endif
+ //J.I.C.* return res;
+//J.I.C.*}
+//Grok aided and recommended modification to add debugging function statements to SD initiation 04/13/25
 static bool prepSD_MMC() {
   bool res = false;
 #if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)
@@ -54,30 +93,36 @@ static bool prepSD_MMC() {
 #if CONFIG_IDF_TARGET_ESP32S3
 #if !defined(SD_MMC_CLK)
   LOG_WRN("SD card pins not defined");
+  Serial.println("SD card pins not defined - cannot initialize SD card"); // Debug message for missing pins
   return false;
 #else
  #if defined(SD_MMC_D1)
   // assume 4 bit mode
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
   use1bitMode = false;
+  Serial.println("Configuring SD card in 4-bit mode"); // Debug message for mode
  #else
   // assume 1 bit mode
   SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+  Serial.println("Configuring SD card in 1-bit mode"); // Debug message for mode
  #endif
 #endif
 #endif
   
+  Serial.println("Attempting to initialize SD card..."); // Debug message before init
   res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
 #if defined(CAMERA_MODEL_AI_THINKER)
   pinMode(4, OUTPUT);
   digitalWrite(4, 0); // set lamp pin fully off as sd_mmc library still initialises pin 4 in 1 line mode
 #endif 
   if (res) {
+    Serial.println("SD card mounted successfully"); // Debug message on success
     fp.mkdir(DATA_DIR);
     infoSD();
     res = true;
   } else {
     LOG_WRN("SD card mount failed");
+    Serial.println("SD card mount failed"); // Debug message on failure
     res = false;
   }
 #endif

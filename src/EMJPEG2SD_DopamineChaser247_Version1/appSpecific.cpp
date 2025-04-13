@@ -766,7 +766,7 @@ void appSpecificTelegramTask(void* p) {
         sendTgramFile(DATA_DIR "/ramlog" TEXT_EXT, "text/plain", userCmd);
         deleteFolderOrFile(DATA_DIR "/ramlog" TEXT_EXT);
       } else {
-        // initially assume it is an avi file download request
+        //inially assume it is an avi file download request
         if (!downloadAvi(userCmd)) sendTgramMessage("Request not recognised: ", userCmd, "");
       }
     } else {
