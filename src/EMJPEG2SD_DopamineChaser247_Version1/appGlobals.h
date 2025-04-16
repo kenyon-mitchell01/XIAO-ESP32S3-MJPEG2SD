@@ -223,14 +223,6 @@
 
 /******************** Function declarations *******************/
 
-// Define global variables
-float motionVal = 0.0;      // Motion sensitivity (%)
-uint8_t colorDepth = 0;     // Camera color depth
-uint8_t nightSwitch = 0;    // Night/day switch threshold
-uint8_t lightLevel = 0;     // Light level
-bool motionTriggeredAudio = false; // Audio trigger flag
-bool useMotion = true;      // Motion detection enabled by default
-
 struct mjpegStruct {
   size_t buffLen;
   size_t buffOffset;
@@ -317,13 +309,27 @@ size_t writeWavFile(byte* clientBuf, size_t buffSize);
 
 /******************** Global app declarations *******************/
 
-// Global variables for camera and motion settings
+//* Global variables for camera and motion settings
 extern float motionVal;    // Motion sensitivity (% of changed pixels)
 extern uint8_t colorDepth; // Camera color depth (bits)
 extern uint8_t nightSwitch; // White level % for night/day switching
 extern uint8_t lightLevel;  // Light level for night mode detection
 extern bool motionTriggeredAudio; // Flag for audio triggered by motion
 extern bool useMotion;     // Enable/disable motion detection
+
+//* Global variables for camera and motion settings
+extern float motionVal;    // Motion sensitivity (% of changed pixels)
+extern uint8_t colorDepth; // Camera color depth (bits)
+extern uint8_t nightSwitch; // White level % for night/day switching
+extern uint8_t lightLevel;  // Light level for night mode detection
+extern bool motionTriggeredAudio; // Flag for audio triggered by motion
+extern bool useMotion;     // Enable/disable motion detection
+extern int minSeconds;     // Minimum recording duration
+extern bool stopPlayback;  // Flag to stop playback
+extern int ampVol;         // Amplifier volume
+extern int micGain;        // Microphone gain
+extern bool nightTime;     // Night mode status
+
 
 // motion detection parameters
 extern int moveStartChecks; // checks per second for start motion

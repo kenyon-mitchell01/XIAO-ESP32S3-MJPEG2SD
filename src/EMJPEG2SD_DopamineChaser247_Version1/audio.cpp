@@ -31,7 +31,6 @@
 I2SClass I2Spdm;
 I2SClass I2Sstd;
 
-bool motionTriggeredAudio = false;
 
 // On ESP32, only I2S1 available with camera
 i2s_port_t MIC_CHAN = I2S_NUM_1;
