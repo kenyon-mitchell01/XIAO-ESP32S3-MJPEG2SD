@@ -31,6 +31,8 @@
 I2SClass I2Spdm;
 I2SClass I2Sstd;
 
+bool motionTriggeredAudio = false;
+
 // On ESP32, only I2S1 available with camera
 i2s_port_t MIC_CHAN = I2S_NUM_1;
 i2s_port_t AMP_CHAN = I2S_NUM_0;
@@ -341,13 +343,11 @@ void finishAudioRecord(bool isValid) {
 }
 
 static void camActions() {
-  // apply esp mic input to required outputs
   while (true) {
     size_t bytesRead = 0;
-    if (micRecording || !audioBytes || spkrRem) bytesRead = espMicInput(); // load sampleBuffer
-    if (bytesRead) {
-      if (micRecording) {
-        // record mic input to SD
+    if (micRecording || !audioBytes || spkrRem) {
+      bytesRead = espMicInput(); // load sampleBuffer
+      if (micRecording && motionTriggeredAudio) {
         wavFile.write((uint8_t*)sampleBuffer, bytesRead);
         totalSamples += bytesRead / sampleWidth; 
       }
@@ -357,8 +357,12 @@ static void camActions() {
         audioBytes = bytesRead;
       }
       // intercom esp mic to browser speaker
-      if (spkrRem) wsAsyncSendBinary((uint8_t*)sampleBuffer, bytesRead);
-    } else delay(20);
+      if (spkrRem) {
+        wsAsyncSendBinary((uint8_t*)sampleBuffer, bytesRead);
+      }
+    } else {
+      delay(20);
+    }
   }
 }
 

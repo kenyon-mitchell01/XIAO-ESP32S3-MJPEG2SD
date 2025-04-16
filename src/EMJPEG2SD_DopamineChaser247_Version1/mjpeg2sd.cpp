@@ -7,6 +7,18 @@
 */
 
 #include "appGlobals.h"
+#include "motionDetect.h"
+
+// Define states
+#define STATE_IDLE 0
+#define STATE_RECORDING 1
+#define STATE_SAVING 2
+
+static uint32_t recordingStartTime = 0; // Tracks when recording started (in milliseconds)
+const uint32_t MIN_RECORDING_TIME = 30 * 1000; // 30 seconds minimum recording time
+const uint32_t MAX_RECORDING_TIME = 5 * 60 * 1000; // 5 minutes maximum recording time
+const uint32_t MOTION_CHECK_INTERVAL = 5 * 1000; // Check motion every 5 seconds
+static uint32_t lastMotionCheckTime = 0; // Tracks the last time motion was checked
 
 #define FB_CNT 4 // number of frame buffers
 
@@ -15,10 +27,16 @@ bool useMotion  = true; // whether to use camera for motion detection (with moti
 bool dbgMotion  = false;
 bool forceRecord = false; // Recording enabled by rec button
 
+bool captureMotion = false; // Ensure global scope, Added by Grok's suggestion 04/15/2025
+extern bool motionTriggeredAudio; // Declaration, not a definition
+
+
 // motion detection parameters
 int moveStartChecks = 5; // checks per second for start motion 
-int moveStopSecs = 2; // secs between each check for stop, also determines post motion time
+int moveStopSecs = 5; // Check motion every 5 seconds during recording
 int maxFrames = 20000; // maximum number of frames in video before auto close 
+
+
 
 // record timelapse avi independently of motion capture, file name has same format as avi except ends with T
 int tlSecsBetweenFrames; // too short interval will interfere with other activities
@@ -29,7 +47,7 @@ int tlPlaybackFPS;  // rate to playback the timelapse, min 1
 uint8_t FPS = 0;
 bool nightTime = false;
 uint8_t fsizePtr; // index to frameData[]
-uint8_t minSeconds = 5; // default min video length (includes POST_MOTION_TIME)
+uint8_t minSeconds = 30; // Match MIN_RECORDING_TIME
 bool doRecording = true; // whether to capture to SD or not 
 uint8_t xclkMhz = 20; // camera clock rate MHz
 bool doKeepFrame = false;
@@ -380,103 +398,132 @@ static bool closeAvi() {
   }
 }
 
-static boolean processFrame() {
-  // get camera frame
-  static bool wasCapturing = false;
-  static bool wasRecording = false;
-  static bool captureMotion = false;
-  bool res = true;
-  uint32_t dTime = millis();
-  bool finishRecording = false;
+// New processFrame() as the first step in implementing the "motion dection initiated 60s of video and audio recording" plan 04-16-25
+void processFrame() {
+    static int state = STATE_IDLE;          // Start in IDLE state
+    static uint32_t recordStartTime = 0;    // Timestamp for recording start
+    static uint32_t saveStartTime = 0;      // Timestamp for saving start
 
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) return false;
-  timeLapse(fb);
+    camera_fb_t* fb = esp_camera_fb_get();  // Capture frame
+    if (!fb) return;
 
-  for (int i = 0; i < vidStreams; i++) {
-    if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
-      memcpy(streamBuffer[i], fb->buf, fb->len);
-      streamBufferSize[i] = fb->len;   
-      xSemaphoreGive(frameSemaphore[i]); // signal frame ready for stream
+    switch (state) {
+        case STATE_IDLE:
+            // Placeholder: Motion detection will go here in the next step
+            break;
+
+        case STATE_RECORDING:
+            // Placeholder: Recording logic will go here
+            break;
+
+        case STATE_SAVING:
+            // Placeholder: Saving delay will go here
+            break;
     }
-  }
-  if (doKeepFrame) {
-    keepFrame(fb);
-    doKeepFrame = false;
-  }
+
+    esp_camera_fb_return(fb);               // Release frame
+}
+
+//processFrame() function was completely replased by a new function written by Grok 04/15/25 to accomplish my requested customizations. 
+//*static boolean processFrame() {
+  // get camera frame
+  //*static bool wasCapturing = false;
+  //*static bool wasRecording = false;
+  //*static bool captureMotion = false;
+  //*bool res = true;
+  //*uint32_t dTime = millis();
+  //*bool finishRecording = false;
+
+  //*camera_fb_t* fb = esp_camera_fb_get();
+  //*if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) return false;
+  //*timeLapse(fb);
+
+  //*for (int i = 0; i < vidStreams; i++) {
+    //*if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
+      //*memcpy(streamBuffer[i], fb->buf, fb->len);
+      //*streamBufferSize[i] = fb->len;   
+      //*xSemaphoreGive(frameSemaphore[i]); // signal frame ready for stream
+    //*}
+  //*}
+  //*if (doKeepFrame) {
+    //*keepFrame(fb);
+    //*doKeepFrame = false;
+  //*}
 
   // determine if time to monitor
-  if (useMotion && doMonitor(isCapturing)) captureMotion = checkMotion(fb, isCapturing); // check 1 in N frames
-  if (!useMotion && doMonitor(true)) checkMotion(fb, false, true); // calc light level only
+  //*if (useMotion && doMonitor(isCapturing)) captureMotion = checkMotion(fb, isCapturing); // check 1 in N frames
+      //*motionTriggeredAudio = captureMotion;
+  //*if (!useMotion && doMonitor(true)) checkMotion(fb, false, true); // calc light level only
+//*}
   
-#if INCLUDE_PERIPH
-  if (pirUse) {
-    pirVal = getPIRval();
-    if (pirVal && !isCapturing) {
+//*#if INCLUDE_PERIPH  
+  //*if (pirUse) {
+    //*pirVal = getPIRval();
+    //*if (pirVal && !isCapturing) {
       // start of PIR detection, switch on lamp if requested
-      if (lampAuto && nightTime) setLamp(lampLevel);
-      notifyMotion(fb);
-    } 
-  }
-#endif
+      //*if (lampAuto && nightTime) setLamp(lampLevel);
+      //*notifyMotion(fb);
+    //*} 
+  //*}
+//*#endif
 
   // either active PIR, Motion, or force start button will start capture, neither active will stop capture
-  isCapturing = forceRecord | captureMotion | pirVal;
-  if (forceRecord || wasRecording || doRecording) {
-    if (forceRecord && !wasRecording) wasRecording = true;
-    else if (!forceRecord && wasRecording) wasRecording = false;
+  //*isCapturing = forceRecord | captureMotion | pirVal;
+  //*if (forceRecord || wasRecording || doRecording) {
+    //*if (forceRecord && !wasRecording) wasRecording = true;
+    //*else if (!forceRecord && wasRecording) wasRecording = false;
     
-    if (isCapturing && !wasCapturing) {
+    //*if (isCapturing && !wasCapturing) {
       // movement has occurred, start recording
-      stopPlaying(); // terminate any playback
-      stopPlayback = true; // stop any subsequent playback
-      LOG_ALT("Capture started by %s%s%s", captureMotion ? "Motion " : "", pirVal ? "PIR" : "",forceRecord ? "Button" : "");
-#if INCLUDE_MQTT
-      if (mqtt_active) {
-        sprintf(jsonBuff, "{\"RECORD\":\"ON\", \"TIME\":\"%s\"}", esp_log_system_timestamp());
-        mqttPublish(jsonBuff);
-        mqttPublishPath("record", "on");
-      }
-#endif
-#if INCLUDE_PERIPH
-      buzzerAlert(true); // sound buzzer if enabled
-#endif
-      openAvi();
-      wasCapturing = true;
-    }
-    if (isCapturing && wasCapturing) {
+      //*stopPlaying(); // terminate any playback
+      //*stopPlayback = true; // stop any subsequent playback
+      //*LOG_ALT("Capture started by %s%s%s", captureMotion ? "Motion " : "", pirVal ? "PIR" : "",forceRecord ? "Button" : "");
+//*#if INCLUDE_MQTT
+      //*if (mqtt_active) {
+        //*sprintf(jsonBuff, "{\"RECORD\":\"ON\", \"TIME\":\"%s\"}", esp_log_system_timestamp());
+        //*mqttPublish(jsonBuff);
+        //*mqttPublishPath("record", "on");
+      //*}
+//*#endif
+//*#if INCLUDE_PERIPH
+      //*buzzerAlert(true); // sound buzzer if enabled
+//*#endif
+      //*openAvi();
+      //*wasCapturing = true;
+    //*}
+    //*if (isCapturing && wasCapturing) {
       // capture is ongoing
-      dTimeTot += millis() - dTime;
-      saveFrame(fb);
-      showProgress();
-#if INCLUDE_PERIPH
-      if (buzzerUse && frameCnt / FPS >= buzzerDuration) buzzerAlert(false); // switch off after given period 
-#endif
-      if (frameCnt >= maxFrames) {
-        logLine();
-        LOG_INF("Auto closed recording after %u frames", maxFrames);
-        forceRecord = false;
-      }
-    }
-    if (!isCapturing && wasCapturing) {
+      //*dTimeTot += millis() - dTime;
+      //*saveFrame(fb);
+      //*showProgress();
+//*#if INCLUDE_PERIPH
+      //*if (buzzerUse && frameCnt / FPS >= buzzerDuration) buzzerAlert(false); // switch off after given period 
+//*#endif
+      //*if (frameCnt >= maxFrames) {
+        //*logLine();
+        //*LOG_INF("Auto closed recording after %u frames", maxFrames);
+        //*forceRecord = false;
+      //*}
+    //*}
+    //*if (!isCapturing && wasCapturing) {
       // movement stopped
-      finishRecording = true;
-#if INCLUDE_PERIPH
-      if (lampAuto) setLamp(0); // switch off lamp
-      buzzerAlert(false); // switch off buzzer
-#endif
-    }
-    wasCapturing = isCapturing;
-  }
+      //*finishRecording = true;
+//*#if INCLUDE_PERIPH
+      //*if (lampAuto) setLamp(0); // switch off lamp
+      //*buzzerAlert(false); // switch off buzzer
+//*#endif
+    //*}
+    //*wasCapturing = isCapturing;
+  //*}
 
-  esp_camera_fb_return(fb);
-  if (finishRecording) {
+  //*esp_camera_fb_return(fb);
+  //*if (finishRecording) {
     // cleanly finish recording (normal or forced)
-    if (stopPlayback) closeAvi();
-    finishRecording = isCapturing = wasCapturing = stopPlayback = false; // allow for playbacks
-  }
-  return res;
-}
+    //*if (stopPlayback) closeAvi();
+    //*finishRecording = isCapturing = wasCapturing = stopPlayback = false; // allow for playbacks
+  //*}
+  //*return res;
+//*}
 
 static void captureTask(void* parameter) {
   // woken by frame timer when time to capture frame

@@ -479,7 +479,7 @@ void uploadToComputer(const char* filepath) {
   }
 
   HTTPClient http;
-  http.begin("http://192.168.1.50:8000"); // Replace with your computer's IP
+  http.begin("http://192.168.1.193:8000"); // Replace with your computer's IP
   http.addHeader("Content-Type", "application/octet-stream");
   http.addHeader("X-Filename", filepath);
 
@@ -530,8 +530,29 @@ void uploadToComputer(const char* filepath) {
   free(buffer);
   http.end();
 }
+
 void uploadRecordings() {
-    // Placeholder implementation
-    Serial.println("uploadRecordings() called - placeholder");
-    // Add your upload logic here later
+  File root = SD.open("/data");
+  if (!root) {
+    LOG_WRN("Failed to open /data");
+    return;
+  }
+  while (File dir = root.openNextFile()) {
+    if (dir.isDirectory()) {
+      File file = dir.openNextFile();
+      while (file) {
+        char filepath[FILE_NAME_LEN];
+        snprintf(filepath, FILE_NAME_LEN, "/data/%s/%s", dir.name(), file.name());
+        uploadToComputer(filepath);
+        file = dir.openNextFile();
+      }
+    }
+  }
+  root.close();
 }
+
+//*void uploadRecordings() {
+    // Placeholder implementation
+    //*Serial.println("uploadRecordings() called - placeholder");
+    // Add your upload logic here later
+//*}
