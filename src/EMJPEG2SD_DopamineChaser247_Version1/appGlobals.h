@@ -5,6 +5,16 @@
 #pragma once
 #include "globals.h"
 
+#ifndef APP_GLOBALS_H
+#define APP_GLOBALS_H
+
+extern int motionVal;
+extern int colorDepth;
+extern bool nightSwitch;
+extern int lightLevel;
+
+#endif
+
 #if !CONFIG_IDF_TARGET_ESP32S3 && !CONFIG_IDF_TARGET_ESP32
 #error "Must select ESP32 or ESP32S3 board"
 #endif
