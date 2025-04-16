@@ -8,10 +8,6 @@
 #ifndef APP_GLOBALS_H
 #define APP_GLOBALS_H
 
-extern int motionVal;
-extern int colorDepth;
-extern bool nightSwitch;
-extern int lightLevel;
 
 #endif
 
@@ -54,6 +50,7 @@ extern int lightLevel;
 //#define CAMERA_MODEL_XENOIONEX
 //#define AUXILIARY
 #endif
+
 
 /***************************************************************
   Optional features NOT included by default to reduce heap use 
@@ -226,6 +223,14 @@ extern int lightLevel;
 
 /******************** Function declarations *******************/
 
+// Define global variables
+float motionVal = 0.0;      // Motion sensitivity (%)
+uint8_t colorDepth = 0;     // Camera color depth
+uint8_t nightSwitch = 0;    // Night/day switch threshold
+uint8_t lightLevel = 0;     // Light level
+bool motionTriggeredAudio = false; // Audio trigger flag
+bool useMotion = true;      // Motion detection enabled by default
+
 struct mjpegStruct {
   size_t buffLen;
   size_t buffOffset;
@@ -312,6 +317,14 @@ size_t writeWavFile(byte* clientBuf, size_t buffSize);
 
 /******************** Global app declarations *******************/
 
+// Global variables for camera and motion settings
+extern float motionVal;    // Motion sensitivity (% of changed pixels)
+extern uint8_t colorDepth; // Camera color depth (bits)
+extern uint8_t nightSwitch; // White level % for night/day switching
+extern uint8_t lightLevel;  // Light level for night mode detection
+extern bool motionTriggeredAudio; // Flag for audio triggered by motion
+extern bool useMotion;     // Enable/disable motion detection
+
 // motion detection parameters
 extern int moveStartChecks; // checks per second for start motion
 extern int moveStopSecs; // secs between each check for stop, also determines post motion time
@@ -345,17 +358,17 @@ extern uint8_t FPS;
 extern uint8_t fsizePtr; // index to frameData[] for record
 extern framesize_t maxFS;
 extern bool isCapturing;
-extern uint8_t lightLevel;  
-extern uint8_t lampLevel;  
-extern int micGain;
-extern int8_t ampVol;
-extern uint8_t minSeconds; // default min video length (includes moveStopSecs time)
-extern float motionVal;  // motion sensitivity setting - min percentage of changed pixels that constitute a movement
-extern uint8_t nightSwitch; // initial white level % for night/day switching
-extern bool nightTime; 
-extern bool stopPlayback;
-extern bool useMotion; // whether to use camera for motion detection (with motionDetect.cpp)  
-extern uint8_t colorDepth;
+//*extern uint8_t lightLevel;  
+//*extern uint8_t lampLevel;  
+//*extern int micGain;
+//*extern int8_t ampVol;
+//*extern uint8_t minSeconds; // default min video length (includes moveStopSecs time)
+//*extern float motionVal;  // motion sensitivity setting - min percentage of changed pixels that constitute a movement
+//*extern uint8_t nightSwitch; // initial white level % for night/day switching
+//*extern bool nightTime; 
+//*extern bool stopPlayback;
+//*extern bool useMotion; // whether to use camera for motion detection (with motionDetect.cpp)  
+//*extern uint8_t colorDepth;
 extern bool timeLapseOn; // enable time lapse recording
 extern int maxFrames;
 extern uint8_t xclkMhz;
