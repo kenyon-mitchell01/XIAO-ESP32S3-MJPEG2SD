@@ -64,7 +64,6 @@ int mampSdIo = -1;   // I2S DIN
 int ampTimeout = 1000; // ms for amp write abandoned if no output
 uint32_t SAMPLE_RATE = 16000;  // audio rate in Hz
 int micGain = 0;  // microphone gain 0 is off 
-int8_t ampVol = 0; // amplifier volume factor 0 is off
 
 TaskHandle_t audioHandle = NULL;
 
@@ -75,7 +74,7 @@ int16_t* sampleBuffer = NULL;
 static uint8_t* wsBuffer = NULL;
 static size_t wsBufferLen = 0;
 uint8_t* audioBuffer = NULL; // VC recording buffer or cam mic input streamed to NVR
-size_t audioBytes = 0; 
+size_t audioBytes = 0;
 
 static const char* micLabels[2] = {"PDM", "I2S"};
 
