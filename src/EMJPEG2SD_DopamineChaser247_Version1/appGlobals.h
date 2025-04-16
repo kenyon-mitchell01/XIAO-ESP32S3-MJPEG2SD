@@ -317,14 +317,7 @@ extern uint8_t lightLevel;  // Light level for night mode detection
 extern bool motionTriggeredAudio; // Flag for audio triggered by motion
 extern bool useMotion;     // Enable/disable motion detection
 
-//* Global variables for camera and motion settings
-extern float motionVal;    // Motion sensitivity (% of changed pixels)
-extern uint8_t colorDepth; // Camera color depth (bits)
-extern uint8_t nightSwitch; // White level % for night/day switching
-extern uint8_t lightLevel;  // Light level for night mode detection
-extern bool motionTriggeredAudio; // Flag for audio triggered by motion
-extern bool useMotion;     // Enable/disable motion detection
-extern int minSeconds;     // Minimum recording duration
+extern uint8_t minSeconds;     // Minimum recording duration
 extern bool stopPlayback;  // Flag to stop playback
 extern int ampVol;         // Amplifier volume
 extern int micGain;        // Microphone gain

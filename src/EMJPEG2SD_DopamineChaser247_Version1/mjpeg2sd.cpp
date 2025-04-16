@@ -23,7 +23,7 @@ static uint32_t lastMotionCheckTime = 0; // Tracks the last time motion was chec
 #define FB_CNT 4 // number of frame buffers
 
 // user parameters set from web
-bool useMotion  = true; // whether to use camera for motion detection (with motionDetect.cpp)
+//*bool useMotion  = true; // whether to use camera for motion detection (with motionDetect.cpp)
 bool dbgMotion  = false;
 bool forceRecord = false; // Recording enabled by rec button
 
@@ -45,9 +45,9 @@ int tlPlaybackFPS;  // rate to playback the timelapse, min 1
 
 // status & control fields
 uint8_t FPS = 0;
-bool nightTime = false;
+//*bool nightTime = false;
 uint8_t fsizePtr; // index to frameData[]
-uint8_t minSeconds = 30; // Match MIN_RECORDING_TIME
+//uint8_t minSeconds = 30; // Match MIN_RECORDING_TIME
 bool doRecording = true; // whether to capture to SD or not 
 uint8_t xclkMhz = 20; // camera clock rate MHz
 bool doKeepFrame = false;
@@ -95,7 +95,7 @@ SemaphoreHandle_t motionSemaphore = NULL;
 SemaphoreHandle_t aviMutex = NULL;
 static volatile bool isPlaying = false; // controls playback on app
 bool isCapturing = false;
-bool stopPlayback = false; // controls if playback allowed
+//*bool stopPlayback = false; // controls if playback allowed
 bool timeLapseOn = false;
 static bool pirVal = false;
 

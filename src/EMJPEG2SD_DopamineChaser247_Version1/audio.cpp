@@ -63,7 +63,7 @@ int mampSdIo = -1;   // I2S DIN
 
 int ampTimeout = 1000; // ms for amp write abandoned if no output
 uint32_t SAMPLE_RATE = 16000;  // audio rate in Hz
-int micGain = 0;  // microphone gain 0 is off 
+//*int micGain = 0;  // microphone gain 0 is off 
 
 TaskHandle_t audioHandle = NULL;
 
