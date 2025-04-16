@@ -398,30 +398,49 @@ static bool closeAvi() {
   }
 }
 
+//Debug for processFrame() to be shown in serial monitor 04-16-2025
+enum RecordState { IDLE, RECORDING, COOLDOWN };
+RecordState recordState = IDLE;
+unsigned long recordStartTime = 0;
+const unsigned long RECORD_DURATION = 60000; // 60 seconds
+const unsigned long COOLDOWN_DURATION = 5000; // 5 seconds
+
 // New processFrame() as the first step in implementing the "motion dection initiated 60s of video and audio recording" plan 04-16-25
 void processFrame() {
-    static int state = STATE_IDLE;          // Start in IDLE state
-    static uint32_t recordStartTime = 0;    // Timestamp for recording start
-    static uint32_t saveStartTime = 0;      // Timestamp for saving start
+  if (!captureFrame()) return;
 
-    camera_fb_t* fb = esp_camera_fb_get();  // Capture frame
-    if (!fb) return;
+  // Check for motion if enabled
+  if (useMotion) {
+    float changedPixels = calculateMotion(); // Placeholder for motion calculation
+    Serial.print("Changed pixels: ");
+    Serial.println(changedPixels);
 
-    switch (state) {
-        case STATE_IDLE:
-            // Placeholder: Motion detection will go here in the next step
-            break;
-
-        case STATE_RECORDING:
-            // Placeholder: Recording logic will go here
-            break;
-
-        case STATE_SAVING:
-            // Placeholder: Saving delay will go here
-            break;
+    if (changedPixels > motionVal) {
+      if (recordState == IDLE) {
+        recordState = RECORDING;
+        recordStartTime = millis();
+        startRecording();
+        motionTriggeredAudio = true; // Trigger audio if applicable
+        Serial.println("Motion detected! Recording started.");
+      }
     }
+  }
 
-    esp_camera_fb_return(fb);               // Release frame
+  // Manage recording state
+  if (recordState == RECORDING) {
+    if (millis() - recordStartTime >= RECORD_DURATION) {
+      stopRecording();
+      motionTriggeredAudio = false;
+      recordState = COOLDOWN;
+      recordStartTime = millis();
+      Serial.println("Recording stopped, entering cooldown.");
+    }
+  } else if (recordState == COOLDOWN) {
+    if (millis() - recordStartTime >= COOLDOWN_DURATION) {
+      recordState = IDLE;
+      Serial.println("Cooldown ended, ready for new motion.");
+    }
+  }
 }
 
 //processFrame() function was completely replased by a new function written by Grok 04/15/25 to accomplish my requested customizations. 
