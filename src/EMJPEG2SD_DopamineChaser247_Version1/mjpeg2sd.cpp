@@ -15,6 +15,10 @@
 #define STATE_RECORDING 1
 #define STATE_SAVING 2
 
+#define MIN_RECORDING_TIME_MS (minSeconds * 1000) // Convert to milliseconds
+#define MAX_RECORDING_TIME_MS (5 * 60 * 1000)     // 5 minutes maximum
+#define COOLDOWN_TIME_MS (5 * 1000)               // 5 seconds cooldown
+
 static uint32_t recordingStartTime = 0; // Tracks when recording started (in milliseconds)
 const uint32_t MIN_RECORDING_TIME = 30 * 1000; // 30 seconds minimum recording time
 const uint32_t MAX_RECORDING_TIME = 5 * 60 * 1000; // 5 minutes maximum recording time
@@ -419,168 +423,173 @@ void stopRecording() {
     vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 
-void processFrame() {
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-        Serial.println("Camera capture failed");
+static void processFrame() {
+    // Get camera frame
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) {
+        // Invalid frame, just return
+        Serial.println("Camera capture failed or invalid frame");
+        if (fb) esp_camera_fb_return(fb);
         return;
     }
-
-    if (useMotion && recordState == IDLE) {
-        bool motionDetected = checkMotion(fb, false, false);
-        if (motionDetected) {
-            recordState = RECORDING;
-            recordStartTime = millis();
-            startRecording();
-            Serial.println("Motion detected! Recording started.");
+    
+    // Process the frame for time lapse if enabled
+    timeLapse(fb);
+    
+    // Make the frame available for streaming if needed
+    for (int i = 0; i < vidStreams; i++) {
+        if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
+            memcpy(streamBuffer[i], fb->buf, fb->len);
+            streamBufferSize[i] = fb->len;   
+            xSemaphoreGive(frameSemaphore[i]); // signal frame ready for stream
         }
     }
-
-    if (recordState == RECORDING) {
-        if (millis() - recordStartTime >= RECORD_DURATION) {
-            stopRecording();
-            recordState = COOLDOWN;
-            recordStartTime = millis();
-            Serial.println("Recording stopped, entering cooldown.");
-        }
-    } else if (recordState == COOLDOWN) {
-        if (millis() - recordStartTime >= COOLDOWN_DURATION) {
-            recordState = IDLE;
-            Serial.println("Cooldown ended, ready for new motion.");
-        }
+    
+    // Handle still image capture if requested
+    if (doKeepFrame) {
+        keepFrame(fb);
+        doKeepFrame = false;
     }
 
+    // State machine for recording
+    static uint32_t stateStartTime = 0;  // Time when current state started
+    static bool motionDetected = false;  // Current motion detection status
+    
+    // Check for motion periodically based on current state
+    uint32_t currentTime = millis();
+    bool checkForMotion = false;
+    
+    switch (recordState) {
+        case IDLE:
+            // In IDLE state, check motion at the normal rate
+            checkForMotion = true;
+            break;
+            
+        case RECORDING:
+            // During recording, only check motion every moveStopSecs
+            if (currentTime - lastMotionCheckTime >= (moveStopSecs * 1000)) {
+                checkForMotion = true;
+                lastMotionCheckTime = currentTime;
+            }
+            
+            // Check if we've exceeded maximum recording time
+            if (currentTime - recordingStartTime >= MAX_RECORDING_TIME_MS) {
+                Serial.println("Max recording time reached, closing file");
+                closeAvi();
+                recordState = COOLDOWN;
+                stateStartTime = currentTime;
+            }
+            break;
+            
+        case COOLDOWN:
+            // In COOLDOWN state, wait for the cooldown period to expire
+            if (currentTime - stateStartTime >= COOLDOWN_TIME_MS) {
+                Serial.println("Cooldown complete, returning to IDLE");
+                recordState = IDLE;
+            }
+            break;
+    }
+    
+    // Check for motion if needed
+    if (checkForMotion && useMotion) {
+        motionDetected = checkMotion(fb, motionDetected);
+        motionTriggeredAudio = motionDetected; // For audio recording
+    } else if (!useMotion && checkForMotion) {
+        // Just calculate light level
+        checkMotion(fb, false, true);
+    }
+    
+#if INCLUDE_PERIPH
+    // Handle PIR sensor if enabled
+    if (pirUse) {
+        bool pirDetected = getPIRval();
+        if (pirDetected && !motionDetected) {
+            // PIR detected motion
+            motionDetected = true;
+            if (lampAuto && nightTime) setLamp(lampLevel);
+            notifyMotion(fb);
+        }
+    }
+#endif
+
+    // State transitions based on motion and force record
+    bool shouldRecord = motionDetected || forceRecord;
+    
+    switch (recordState) {
+        case IDLE:
+            if (shouldRecord) {
+                // Start recording
+                stopPlaying(); // terminate any playback
+                stopPlayback = true; // stop any subsequent playback
+                
+                LOG_ALT("Capture started by %s%s%s", 
+                       motionDetected ? "Motion " : "", 
+                       pirVal ? "PIR " : "",
+                       forceRecord ? "Button" : "");
+                       
+#if INCLUDE_MQTT
+                if (mqtt_active) {
+                    sprintf(jsonBuff, "{\"RECORD\":\"ON\", \"TIME\":\"%s\"}", 
+                           esp_log_system_timestamp());
+                    mqttPublish(jsonBuff);
+                    mqttPublishPath("record", "on");
+                }
+#endif
+
+#if INCLUDE_PERIPH
+                buzzerAlert(true); // sound buzzer if enabled
+#endif
+                openAvi();
+                recordState = RECORDING;
+                recordingStartTime = currentTime;
+                lastMotionCheckTime = currentTime;
+                Serial.println("Started recording due to motion/manual trigger");
+            }
+            break;
+            
+        case RECORDING:
+            if (!shouldRecord) {
+                // Check if we've recorded for minimum time
+                if (currentTime - recordingStartTime >= MIN_RECORDING_TIME_MS) {
+                    // Stop recording
+                    Serial.println("Motion stopped, finishing recording");
+                    closeAvi();
+                    recordState = COOLDOWN;
+                    stateStartTime = currentTime;
+                    
+#if INCLUDE_PERIPH
+                    if (lampAuto) setLamp(0); // switch off lamp
+                    buzzerAlert(false); // switch off buzzer
+#endif
+                }
+            }
+            
+            // Always save frames while in RECORDING state
+            saveFrame(fb);
+            
+#if INCLUDE_PERIPH
+            // Turn off buzzer after the specified duration
+            if (buzzerUse && (currentTime - recordingStartTime) / 1000 >= buzzerDuration) {
+                buzzerAlert(false);
+            }
+#endif
+
+            // Check if we've hit the frame limit
+            if (frameCnt >= maxFrames) {
+                logLine();
+                LOG_INF("Auto closed recording after %u frames", maxFrames);
+                closeAvi();
+                recordState = COOLDOWN;
+                stateStartTime = currentTime;
+                forceRecord = false; // Clear the force record flag
+            }
+            break;
+    }
+    
+    // Return the frame buffer to the camera
     esp_camera_fb_return(fb);
 }
-//processFrame() function was completely replased by a new function written by Grok 04/15/25 to accomplish my requested customizations. 
-//*static boolean processFrame() {
-  // get camera frame
-  //*static bool wasCapturing = false;
-  //*static bool wasRecording = false;
-  //*static bool captureMotion = false;
-  //*bool res = true;
-  //*uint32_t dTime = millis();
-  //*bool finishRecording = false;
 
-  //*camera_fb_t* fb = esp_camera_fb_get();
-  //*if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) return false;
-  //*timeLapse(fb);
-
-  //*for (int i = 0; i < vidStreams; i++) {
-    //*if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
-      //*memcpy(streamBuffer[i], fb->buf, fb->len);
-      //*streamBufferSize[i] = fb->len;   
-      //*xSemaphoreGive(frameSemaphore[i]); // signal frame ready for stream
-    //*}
-  //*}
-  //*if (doKeepFrame) {
-    //*keepFrame(fb);
-    //*doKeepFrame = false;
-  //*}
-
-  // determine if time to monitor
-  //*if (useMotion && doMonitor(isCapturing)) captureMotion = checkMotion(fb, isCapturing); // check 1 in N frames
-      //*motionTriggeredAudio = captureMotion;
-  //*if (!useMotion && doMonitor(true)) checkMotion(fb, false, true); // calc light level only
-//*}
-  
-//*#if INCLUDE_PERIPH  
-  //*if (pirUse) {
-    //*pirVal = getPIRval();
-    //*if (pirVal && !isCapturing) {
-      // start of PIR detection, switch on lamp if requested
-      //*if (lampAuto && nightTime) setLamp(lampLevel);
-      //*notifyMotion(fb);
-    //*} 
-  //*}
-//*#endif
-
-  // either active PIR, Motion, or force start button will start capture, neither active will stop capture
-  //*isCapturing = forceRecord | captureMotion | pirVal;
-  //*if (forceRecord || wasRecording || doRecording) {
-    //*if (forceRecord && !wasRecording) wasRecording = true;
-    //*else if (!forceRecord && wasRecording) wasRecording = false;
-    
-    //*if (isCapturing && !wasCapturing) {
-      // movement has occurred, start recording
-      //*stopPlaying(); // terminate any playback
-      //*stopPlayback = true; // stop any subsequent playback
-      //*LOG_ALT("Capture started by %s%s%s", captureMotion ? "Motion " : "", pirVal ? "PIR" : "",forceRecord ? "Button" : "");
-//*#if INCLUDE_MQTT
-      //*if (mqtt_active) {
-        //*sprintf(jsonBuff, "{\"RECORD\":\"ON\", \"TIME\":\"%s\"}", esp_log_system_timestamp());
-        //*mqttPublish(jsonBuff);
-        //*mqttPublishPath("record", "on");
-      //*}
-//*#endif
-//*#if INCLUDE_PERIPH
-      //*buzzerAlert(true); // sound buzzer if enabled
-//*#endif
-      //*openAvi();
-      //*wasCapturing = true;
-    //*}
-    //*if (isCapturing && wasCapturing) {
-      // capture is ongoing
-      //*dTimeTot += millis() - dTime;
-      //*saveFrame(fb);
-      //*showProgress();
-//*#if INCLUDE_PERIPH
-      //*if (buzzerUse && frameCnt / FPS >= buzzerDuration) buzzerAlert(false); // switch off after given period 
-//*#endif
-      //*if (frameCnt >= maxFrames) {
-        //*logLine();
-        //*LOG_INF("Auto closed recording after %u frames", maxFrames);
-        //*forceRecord = false;
-      //*}
-    //*}
-    //*if (!isCapturing && wasCapturing) {
-      // movement stopped
-      //*finishRecording = true;
-//*#if INCLUDE_PERIPH
-      //*if (lampAuto) setLamp(0); // switch off lamp
-      //*buzzerAlert(false); // switch off buzzer
-//*#endif
-    //*}
-    //*wasCapturing = isCapturing;
-  //*}
-
-  //*esp_camera_fb_return(fb);
-  //*if (finishRecording) {
-    // cleanly finish recording (normal or forced)
-    //*if (stopPlayback) closeAvi();
-    //*finishRecording = isCapturing = wasCapturing = stopPlayback = false; // allow for playbacks
-  //*}
-  //*return res;
-//*}
-
-static void captureTask(void* parameter) {
-  // woken by frame timer when time to capture frame
-  uint32_t ulNotifiedValue;
-  while (true) {
-    ulNotifiedValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    if (ulNotifiedValue > FB_CNT) ulNotifiedValue = FB_CNT; // prevent too big queue if FPS excessive
-    // may be more than one isr outstanding if the task delayed by SD write or jpeg decode
-    while (ulNotifiedValue-- > 0) processFrame();
-  }
-  vTaskDelete(NULL);
-}
-
-uint8_t setFPS(uint8_t val) {
-  // change or retrieve FPS value
-  if (val) {
-    FPS = val;
-    // change frame timer which drives the task
-    controlFrameTimer(true);
-    saveFPS = FPS; // used to reset FPS after playback
-  }
-  return FPS;
-}
-
-uint8_t setFPSlookup(uint8_t val) {
-  // set FPS from framesize lookup
-  fsizePtr = val;
-  return setFPS(frameData[fsizePtr].defaultFPS);
-}
 
 /********************** plackback AVI as MJPEG ***********************/
 
@@ -945,303 +954,203 @@ static esp_err_t changeXCLK(camera_config_t config) {
   delay(200); // base on datasheet, it needs < 300 ms for configuration to settle in. we just put 200ms. it doesnt hurt.
   return res;
 }
-//Grok aided and recommended modification to add debugging function statements to Camera initiation 04/13/25
+
 bool prepCam() {
-  // initialise camera depending on model and board
-  if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0])) 
-    LOG_ERR("framesize_t entries %d != frameData entries %d", FRAMESIZE_INVALID, sizeof(frameData) / sizeof(frameData[0]));
-  if (!camPower()) return false;
+    // Initialize camera depending on model and board
+    if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0])) 
+        LOG_ERR("framesize_t entries %d != frameData entries %d", FRAMESIZE_INVALID, sizeof(frameData) / sizeof(frameData[0]));
+        
+    if (!camPower()) {
+        LOG_ERR("Failed to power camera");
+        Serial.println("Failed to power camera module");
+        return false;
+    }
+    
 #if INCLUDE_I2C
-  if (shareI2C(SIOD_GPIO_NUM, SIOC_GPIO_NUM)) { 
-    // if shared, set camera to use shared
-    siodGpio = -1;
-    siocGpio = -1;
-  }
+    if (shareI2C(SIOD_GPIO_NUM, SIOC_GPIO_NUM)) { 
+        // If shared, set camera to use shared
+        siodGpio = -1;
+        siocGpio = -1;
+        Serial.println("Using shared I2C pins for camera");
+    }
 #endif
 
-  bool res = false;
-  // buffer sizing depends on psram size (2M, 4M or 8M)
-  // FRAMESIZE_QSXGA = 1MB, FRAMESIZE_UXGA = 375KB (as JPEG)
-  maxFS = FRAMESIZE_SVGA; // 2M
-  if (ESP.getPsramSize() > 5 * ONEMEG) maxFS = FRAMESIZE_QSXGA; // 8M
-  else if (ESP.getPsramSize() > 3 * ONEMEG) maxFS = FRAMESIZE_UXGA; // 4M
-  // define buffer size depending on maximum frame size available, esp32-camera/driver/cam_hal.c: cam_obj->recv_size
-  maxFrameBuffSize = maxAlertBuffSize = frameData[maxFS].frameWidth * frameData[maxFS].frameHeight / 5; 
-  LOG_INF("Max frame size for %s PSRAM is %s", fmtSize(ESP.getPsramSize()), frameData[maxFS].frameSizeStr);
+    bool res = false;
+    // Buffer sizing depends on PSRAM size
+    size_t psramSize = ESP.getPsramSize();
+    Serial.printf("Available PSRAM: %s\n", fmtSize(psramSize));
+    
+    // Set maximum frame size based on available PSRAM
+    maxFS = FRAMESIZE_SVGA; // Default for 2MB PSRAM
+    if (psramSize > 5 * ONEMEG) {
+        maxFS = FRAMESIZE_QSXGA; // 8MB PSRAM
+        Serial.println("8MB PSRAM detected, using QSXGA max frame size");
+    } else if (psramSize > 3 * ONEMEG) {
+        maxFS = FRAMESIZE_UXGA; // 4MB PSRAM
+        Serial.println("4MB PSRAM detected, using UXGA max frame size");
+    } else {
+        Serial.println("2MB PSRAM detected, using SVGA max frame size");
+    }
+    
+    // Define buffer size based on maximum frame size
+    maxFrameBuffSize = maxAlertBuffSize = frameData[maxFS].frameWidth * frameData[maxFS].frameHeight / 5; 
+    LOG_INF("Max frame size for %s PSRAM is %s", fmtSize(psramSize), frameData[maxFS].frameSizeStr);
 
-  // configure camera
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_1;
-  config.ledc_timer = LEDC_TIMER_1;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sccb_sda = siodGpio;
-  config.pin_sccb_scl = siocGpio;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = xclkMhz * OneMHz;
-  config.pixel_format = PIXFORMAT_JPEG;
-  config.grab_mode = CAMERA_GRAB_LATEST;
-  // init with high specs to pre-allocate larger buffers
-  config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.frame_size = maxFS;
-  config.jpeg_quality = 10;
-  config.fb_count = FB_CNT;
-  config.sccb_i2c_port = 0; // using I2C 0. to be sure what port we are using.
-
+    // Configure camera
+    camera_config_t config;
+    config.ledc_channel = LEDC_CHANNEL_1;
+    config.ledc_timer = LEDC_TIMER_1;
+    config.pin_d0 = Y2_GPIO_NUM;
+    config.pin_d1 = Y3_GPIO_NUM;
+    config.pin_d2 = Y4_GPIO_NUM;
+    config.pin_d3 = Y5_GPIO_NUM;
+    config.pin_d4 = Y6_GPIO_NUM;
+    config.pin_d5 = Y7_GPIO_NUM;
+    config.pin_d6 = Y8_GPIO_NUM;
+    config.pin_d7 = Y9_GPIO_NUM;
+    config.pin_xclk = XCLK_GPIO_NUM;
+    config.pin_pclk = PCLK_GPIO_NUM;
+    config.pin_vsync = VSYNC_GPIO_NUM;
+    config.pin_href = HREF_GPIO_NUM;
+    config.pin_sccb_sda = siodGpio;
+    config.pin_sccb_scl = siocGpio;
+    config.pin_pwdn = PWDN_GPIO_NUM;
+    config.pin_reset = RESET_GPIO_NUM;
+    config.xclk_freq_hz = xclkMhz * OneMHz;
+    config.pixel_format = PIXFORMAT_JPEG;
+    config.grab_mode = CAMERA_GRAB_LATEST;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+    config.frame_size = maxFS;
+    config.jpeg_quality = 10; // High quality for initialization
+    config.fb_count = FB_CNT;
+    config.sccb_i2c_port = 0;
+    
+    // Initialize GPIO pins that might be used for camera
 #if defined(CAMERA_MODEL_ESP_EYE)
-  pinMode(13, INPUT_PULLUP);
-  pinMode(14, INPUT_PULLUP);
+    pinMode(13, INPUT_PULLUP);
+    pinMode(14, INPUT_PULLUP);
 #endif
-  // Camera init
-  Serial.println("Attempting to initialize OV2640 camera..."); // Debug message before init
-  esp_err_t err = ESP_FAIL;
-  uint8_t retries = 2;
-  while (retries && err != ESP_OK) {
-    err = esp_camera_init(&config);
-    if (err == ESP_OK) {
-      err = changeXCLK(config);
-      Serial.println("Camera clock adjusted successfully"); // Debug message after clock adjustment
-    }
-    if (err != ESP_OK) {
-      Serial.printf("Camera init failed with error 0x%x on attempt %d\n", err, 3 - retries); // Debug message on failure
-      // power cycle the camera, provided pin is connected
-#if (defined(PWDN_GPIO_NUM)) && (PWDN_GPIO_NUM > -1) // both checks are needed. if send -1 to digitalWrite, it can cause crash.
-      digitalWrite(PWDN_GPIO_NUM, 1);
-      delay(100);
-      digitalWrite(PWDN_GPIO_NUM, 0); 
-      delay(100);
-#else
-      delay(200);
-#endif
-      retries--;
-    }
-  } 
 
-  if (err != ESP_OK) {
-    snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Camera init error 0x%x:%s on %s", err, espErrMsg(err), CAM_BOARD);
-    Serial.println(startupFailure); // Debug message on final failure
-  } else {
-    Serial.println("OV2640 camera initialized successfully"); // Debug message on success
+    Serial.println("Attempting to initialize OV2640 camera...");
+    
+    // Initialize camera with multiple retry attempts
+    esp_err_t err = ESP_FAIL;
+    uint8_t retries = 3; // Increased from 2 to 3
+    
+    while (retries && err != ESP_OK) {
+        // Power cycle the camera before each retry (if applicable)
+        if (retries < 3) {
+            Serial.printf("Camera init retry %d...\n", 4 - retries);
+#if (defined(PWDN_GPIO_NUM)) && (PWDN_GPIO_NUM > -1)
+            digitalWrite(PWDN_GPIO_NUM, 1);
+            delay(100);
+            digitalWrite(PWDN_GPIO_NUM, 0); 
+            delay(100);
+#else
+            delay(300); // Longer delay between retries
+#endif
+        }
+        
+        err = esp_camera_init(&config);
+        if (err == ESP_OK) {
+            Serial.println("Camera initialized successfully, adjusting clock...");
+            err = changeXCLK(config);
+            if (err != ESP_OK) {
+                Serial.printf("Failed to adjust camera clock: %s\n", espErrMsg(err));
+            } else {
+                Serial.println("Camera clock adjusted successfully");
+            }
+        } else {
+            Serial.printf("Camera init failed with error 0x%x (%s) on attempt %d\n", 
+                         err, espErrMsg(err), 4 - retries);
+        }
+        
+        retries--;
+    }
+
+    if (err != ESP_OK) {
+        snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Camera init error 0x%x:%s on %s", 
+                err, espErrMsg(err), CAM_BOARD);
+        Serial.println(startupFailure);
+        return false;
+    }
+    
+    // Get camera sensor and check status
     sensor_t* s = esp_camera_sensor_get();
     if (s == NULL) {
-      snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to access camera on %s", CAM_BOARD);
-      Serial.println(startupFailure); // Debug message on sensor failure
-    } else {
-      switch (s->id.PID) {
-        case (OV2640_PID):
-          strcpy(camModel, "OV2640");
-          break;
-        case (OV3660_PID):
-          strcpy(camModel, "OV3660");
-          break;
-        case (OV5640_PID):
-          strcpy(camModel, "OV5640");
-          break;
-        default:
-          strcpy(camModel, "Other");
-          break;
-      }
-  
-      // set frame size to configured value
-      char fsizePtr[4];
-      if (retrieveConfigVal("framesize", fsizePtr)) s->set_framesize(s, (framesize_t)(atoi(fsizePtr)));
-      else s->set_framesize(s, FRAMESIZE_SVGA);
-
-      // model specific corrections
-      if (s->id.PID == OV3660_PID) {
-        // initial sensors are flipped vertically and colors are a bit saturated
-        s->set_vflip(s, 1); // flip it back
-        s->set_brightness(s, 1); // up the brightness just a bit
-        s->set_saturation(s, -2); // lower the saturation
-      }
-  
-      #if defined(CAMERA_MODEL_M5STACK_WIDE)
-      s->set_vflip(s, 1);
-      s->set_hmirror(s, 1);
-      #endif
-  
-      #if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
-      s->set_vflip(s, 1);
-      s->set_hmirror(s, 1);
-      #endif
-  
-      #if defined(CAMERA_MODEL_ESP32S3_EYE)
-      s->set_vflip(s, 1);
-      #endif
-      res = true;
+        snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to access camera sensor on %s", CAM_BOARD);
+        Serial.println(startupFailure);
+        return false;
     }
-  }
-  // check that camera data is accessible
-  if (res) {
+    
+    // Identify camera model
+    switch (s->id.PID) {
+        case (OV2640_PID):
+            strcpy(camModel, "OV2640");
+            break;
+        case (OV3660_PID):
+            strcpy(camModel, "OV3660");
+            break;
+        case (OV5640_PID):
+            strcpy(camModel, "OV5640");
+            break;
+        default:
+            strcpy(camModel, "Other");
+            break;
+    }
+    
+    Serial.printf("Camera identified as %s\n", camModel);
+    
+    // Set frame size from config or default
+    char fsizeStr[4];
+    framesize_t initialFrameSize = FRAMESIZE_SVGA;
+    
+    if (retrieveConfigVal("framesize", fsizeStr)) {
+        initialFrameSize = (framesize_t)(atoi(fsizeStr));
+        Serial.printf("Setting framesize from config: %s\n", frameData[initialFrameSize].frameSizeStr);
+    } else {
+        Serial.printf("Using default framesize: %s\n", frameData[initialFrameSize].frameSizeStr);
+    }
+    
+    s->set_framesize(s, initialFrameSize);
+    
+    // Apply model-specific corrections
+    if (s->id.PID == OV3660_PID) {
+        // Initial sensors are flipped vertically and colors are a bit saturated
+        s->set_vflip(s, 1); // Flip it back
+        s->set_brightness(s, 1); // Up brightness slightly
+        s->set_saturation(s, -2); // Lower saturation
+        Serial.println("Applied OV3660-specific corrections");
+    }
+    
+    // Apply board-specific settings
+#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
+    s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
+    Serial.println("Applied M5STACK-specific mirror/flip settings");
+#endif
+
+#if defined(CAMERA_MODEL_ESP32S3_EYE)
+    s->set_vflip(s, 1);
+    Serial.println("Applied ESP32S3_EYE-specific flip settings");
+#endif
+
+    // Verify camera functionality by capturing a test frame
     camera_fb_t* fb = esp_camera_fb_get();
     if (fb == NULL) {
-      // usually a camera hardware / ribbon cable fault
-      snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to get camera frame - check camera hardware"); 
-      Serial.println(startupFailure); // Debug message on frame buffer failure
+        // Usually indicates a hardware issue
+        snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to get camera frame - check camera hardware"); 
+        Serial.println(startupFailure);
+        return false;
     } else {
-      esp_camera_fb_return(fb);
-      fb = NULL;
-      res = true;
-      LOG_INF("Camera model %s ready @ %uMHz", camModel, xclkMhz); 
+        Serial.printf("Test frame captured successfully: %ux%u, %u bytes\n", 
+                     fb->width, fb->height, fb->len);
+        esp_camera_fb_return(fb);
+        fb = NULL;
+        res = true;
+        LOG_INF("Camera model %s ready @ %uMHz", camModel, xclkMhz); 
     }
-  }
-  debugMemory("prepCam");
-  return res;
+    
+    debugMemory("prepCam");
+    return res;
 }
-//Original Camera Initialization Code
-//J.I.C.*bool prepCam() {
-  // initialise camera depending on model and board
-  //J.I.C.*if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0])) 
-  //J.I.C.*  LOG_ERR("framesize_t entries %d != frameData entries %d", FRAMESIZE_INVALID, sizeof(frameData) / sizeof(frameData[0]));
-  //J.I.C.*if (!camPower()) return false;
-//J.I.C.*#if INCLUDE_I2C
-  //J.I.C.*if (shareI2C(SIOD_GPIO_NUM, SIOC_GPIO_NUM)) { 
-    // if shared, set camera to use shared
-    //J.I.C.*siodGpio = -1;
-    //J.I.C.*siocGpio = -1;
-  //J.I.C.*}
-//J.I.C.*#endif
-
-  //J.I.C.*bool res = false;
-  // buffer sizing depends on psram size (2M, 4M or 8M)
-  // FRAMESIZE_QSXGA = 1MB, FRAMESIZE_UXGA = 375KB (as JPEG)
-  //J.I.C.*maxFS = FRAMESIZE_SVGA; // 2M
- //J.I.C.*if (ESP.getPsramSize() > 5 * ONEMEG) maxFS = FRAMESIZE_QSXGA; // 8M
- //J.I.C.*else if (ESP.getPsramSize() > 3 * ONEMEG) maxFS = FRAMESIZE_UXGA; // 4M
-  // define buffer size depending on maximum frame size available, esp32-camera/driver/cam_hal.c: cam_obj->recv_size
-  //J.I.C.*maxFrameBuffSize = maxAlertBuffSize = frameData[maxFS].frameWidth * frameData[maxFS].frameHeight / 5; 
-  //J.I.C.*LOG_INF("Max frame size for %s PSRAM is %s", fmtSize(ESP.getPsramSize()), frameData[maxFS].frameSizeStr);
-
-  // configure camera
-  //J.I.C.*camera_config_t config;
-  //J.I.C.*config.ledc_channel = LEDC_CHANNEL_1;
-  //J.I.C.*config.ledc_timer = LEDC_TIMER_1;
-  //J.I.C.*config.pin_d0 = Y2_GPIO_NUM;
-  //J.I.C.*config.pin_d1 = Y3_GPIO_NUM;
-  //J.I.C.*config.pin_d2 = Y4_GPIO_NUM;
-  //J.I.C.*config.pin_d3 = Y5_GPIO_NUM;
-  //J.I.C.*config.pin_d4 = Y6_GPIO_NUM;
-  //J.I.C.*config.pin_d5 = Y7_GPIO_NUM;
-  //J.I.C.*config.pin_d6 = Y8_GPIO_NUM;
-  //J.I.C.*config.pin_d7 = Y9_GPIO_NUM;
-  //J.I.C.*config.pin_xclk = XCLK_GPIO_NUM;
-  //J.I.C.*config.pin_pclk = PCLK_GPIO_NUM;
-  //J.I.C.*config.pin_vsync = VSYNC_GPIO_NUM;
-  //J.I.C.*config.pin_href = HREF_GPIO_NUM;
-  //J.I.C.*config.pin_sccb_sda = siodGpio;
-  //J.I.C.*config.pin_sccb_scl = siocGpio;
-  //J.I.C.*config.pin_pwdn = PWDN_GPIO_NUM;
-  //J.I.C.*config.pin_reset = RESET_GPIO_NUM;
-  //J.I.C.*config.xclk_freq_hz = xclkMhz * OneMHz;
-  //J.I.C.*config.pixel_format = PIXFORMAT_JPEG;
-  //J.I.C.*config.grab_mode = CAMERA_GRAB_LATEST;
-  // init with high specs to pre-allocate larger buffers
-  //J.I.C.*config.fb_location = CAMERA_FB_IN_PSRAM;
-  //J.I.C.*config.frame_size = maxFS;
-  //J.I.C.*config.jpeg_quality = 10;
-  //J.I.C.*config.fb_count = FB_CNT;
-  //J.I.C.*config.sccb_i2c_port = 0;// using I2C 0. to be sure what port we are using.
-
-//J.I.C.*#if defined(CAMERA_MODEL_ESP_EYE)
-  //J.I.C.*pinMode(13, INPUT_PULLUP);
-  //J.I.C.*pinMode(14, INPUT_PULLUP);
-//J.I.C.*#endif
-
-  // Camera init
-//J.I.C.*Serial.println("OV2640 camera initialized successfully");
-  //J.I.C.*esp_err_t err = ESP_FAIL;
-  //J.I.C.*uint8_t retries = 2;
-  //J.I.C.*while (retries && err != ESP_OK) {
-    //J.I.C.*err = esp_camera_init(&config);
-    //J.I.C.*if (err == ESP_OK) err = changeXCLK(config);
-    //J.I.C.*if (err != ESP_OK) {
-      // power cycle the camera, provided pin is connected
-//J.I.C.*#if (defined(PWDN_GPIO_NUM)) && (PWDN_GPIO_NUM > -1) // both checks are needed. if send -1 to digitalWrite, it can cause crash.
-      //J.I.C.*digitalWrite(PWDN_GPIO_NUM, 1);
-      //J.I.C.*delay(100);
-      //J.I.C.*digitalWrite(PWDN_GPIO_NUM, 0); 
-      //J.I.C.*delay(100);
-//J.I.C.*#else
-      //J.I.C.*delay(200);
-//J.I.C.*#endif
-      //J.I.C.*retries--;
-    //J.I.C.*}
-  //J.I.C.*} 
-
-
-  //J.I.C.*if (err != ESP_OK) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Camera init error 0x%x:%s on %s", err, espErrMsg(err), CAM_BOARD);
-  //J.I.C.*else {
-    //J.I.C.*sensor_t* s = esp_camera_sensor_get();
-    //J.I.C.*if (s == NULL) snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to access camera on %s", CAM_BOARD);
-    //J.I.C.*else {
-      //J.I.C.*switch (s->id.PID) {
-        //J.I.C.*case (OV2640_PID):
-          //J.I.C.*strcpy(camModel, "OV2640");
-        //J.I.C.*break;
-        //J.I.C.*case (OV3660_PID):
-          //J.I.C.*strcpy(camModel, "OV3660");
-        //J.I.C.*break;
-        //J.I.C.*case (OV5640_PID):
-          //J.I.C.*strcpy(camModel, "OV5640");
-        //J.I.C.*break;
-        //J.I.C.*default:
-          //J.I.C.*strcpy(camModel, "Other");
-        //J.I.C.*break;
-      //J.I.C.*}
-  
-      // set frame size to configured value
-      //J.I.C.*char fsizePtr[4];
-      //J.I.C.*if (retrieveConfigVal("framesize", fsizePtr)) s->set_framesize(s, (framesize_t)(atoi(fsizePtr)));
-      //J.I.C.*else s->set_framesize(s, FRAMESIZE_SVGA);
-
-      // model specific corrections
-      //J.I.C.*if (s->id.PID == OV3660_PID) {
-        // initial sensors are flipped vertically and colors are a bit saturated
-        //J.I.C.*s->set_vflip(s, 1);//flip it back
-        //J.I.C.*s->set_brightness(s, 1);//up the brightness just a bit
-        //J.I.C.*s->set_saturation(s, -2);//lower the saturation
-      //J.I.C.*}
-  
-  //J.I.C.*#if defined(CAMERA_MODEL_M5STACK_WIDE)
-      //J.I.C.*s->set_vflip(s, 1);
-      //J.I.C.*s->set_hmirror(s, 1);
-  //J.I.C.*#endif
-  
-  //J.I.C.*#if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
-      //J.I.C.*s->set_vflip(s, 1);
-      //J.I.C.*s->set_hmirror(s, 1);
-  //J.I.C.*#endif
-  
-  //J.I.C.*#if defined(CAMERA_MODEL_ESP32S3_EYE)
-      //J.I.C.*s->set_vflip(s, 1);
-  //J.I.C.*#endif
-      //J.I.C.*res = true;
-    //J.I.C.*}
-  //J.I.C.*}
-  // check that camera data is accessible
-  //J.I.C.*if (res) {
-    //J.I.C.*camera_fb_t* fb = esp_camera_fb_get();
-    //J.I.C.*if (fb == NULL) {
-      // usually a camera hardware / ribbon cable fault
-      //J.I.C.*snprintf(startupFailure, SF_LEN, STARTUP_FAIL "Failed to get camera frame - check camera hardware"); 
-    //J.I.C.*} else {
-      //J.I.C.*esp_camera_fb_return(fb);
-      //J.I.C.*fb = NULL;
-      //J.I.C.*res = true;
-      //J.I.C.*LOG_INF("Camera model %s ready @ %uMHz", camModel, xclkMhz); 
-    //J.I.C.*}
-  //J.I.C.*}
-  //J.I.C.*debugMemory("prepCam");
-  //J.I.C.*return res;
-//J.I.C.*}

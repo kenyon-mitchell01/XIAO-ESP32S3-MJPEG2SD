@@ -47,68 +47,115 @@ static void infoSD() {
 #endif
 }
 
-
+//New prepSD_MMC() from Claude 3.7, 04/17/2025
 static bool prepSD_MMC() {
     bool res = false;
 #if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)
     if (psramFound()) heap_caps_malloc_extmem_enable(MIN_RAM);
     fileVec.reserve(1000);
     if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
+    
+    // Debug and setup preparations
+    Serial.println("Preparing to initialize SD card...");
+    
 #if CONFIG_IDF_TARGET_ESP32S3
     #if !defined(SD_MMC_CLK)
         LOG_WRN("SD card pins not defined");
         Serial.println("SD card pins not defined - cannot initialize SD card");
         return false;
     #else
+        // Try multiple SD card initialization methods if necessary
+        int initAttempts = 0;
+        const int maxAttempts = 3;
+        
         #if defined(SD_MMC_D1)
-            // 4-bit mode
+            // First try 4-bit mode
+            Serial.println("Attempting SD card in 4-bit mode...");
             SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
             use1bitMode = false;
-            Serial.println("Configuring SD card in 4-bit mode");
+            
+            // First attempt - 4-bit mode
+            res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
+            initAttempts++;
+            
+            if (!res) {
+                // If 4-bit mode fails, fall back to 1-bit mode
+                Serial.println("4-bit mode failed, falling back to 1-bit mode...");
+                SD_MMC.end();
+                delay(500);
+                use1bitMode = true;
+                SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+            }
         #else
-            // 1-bit mode
-            SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+            // Only 1-bit mode available
             Serial.println("Configuring SD card in 1-bit mode");
+            SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+            use1bitMode = true;
         #endif
+        
+        // Try 1-bit mode if we haven't succeeded yet
+        while (!res && initAttempts < maxAttempts) {
+            // Try different frequency settings if we need to retry
+            if (initAttempts > 0) {
+                sdmmcFreq = 20000000; // Reduce frequency for reliability
+                Serial.printf("Retry %d: SD card in 1-bit mode @ %d MHz\n", 
+                              initAttempts, sdmmcFreq/1000000);
+            }
+            
+            res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
+            initAttempts++;
+            
+            if (!res) {
+                // Short delay before retry
+                delay(500);
+            }
+        }
     #endif
-#endif
-    Serial.println("Attempting to initialize SD card...");
+#else
+    // Non-ESP32S3 boards
     res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
+#endif
+
+#if defined(CAMERA_MODEL_AI_THINKER)
+    pinMode(4, OUTPUT);
+    digitalWrite(4, 0); // set lamp pin fully off as sd_mmc library still initialises pin 4 in 1 line mode
+#endif 
+
     if (res) {
         Serial.println("SD card mounted successfully");
         fp.mkdir(DATA_DIR);
         infoSD();
-        res = true;
+        
+        // Test SD card with simple write/read operation
+        File testFile = fp.open("/sdtest.txt", FILE_WRITE);
+        if (testFile) {
+            testFile.println("SD card test");
+            testFile.close();
+            Serial.println("SD write test successful");
+            
+            // Read test
+            testFile = fp.open("/sdtest.txt", FILE_READ);
+            if (testFile) {
+                String testStr = testFile.readStringUntil('\n');
+                testFile.close();
+                fp.remove("/sdtest.txt");
+                Serial.println("SD read test successful");
+            } else {
+                Serial.println("SD read test failed!");
+                res = false;
+            }
+        } else {
+            Serial.println("SD write test failed!");
+            res = false;
+        }
     } else {
         LOG_WRN("SD card mount failed");
-        Serial.println("SD card mount failed");
-        res = false;
+        Serial.println("SD card mount failed"); 
     }
 #endif
     return res;
 }
   
-  //*Serial.println("Attempting to initialize SD card..."); // Debug message before init
-  //*res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
-//*#if defined(CAMERA_MODEL_AI_THINKER)
-  //*pinMode(4, OUTPUT);
-  //*digitalWrite(4, 0); // set lamp pin fully off as sd_mmc library still initialises pin 4 in 1 line mode
-//*#endif 
-  //*if (res) {
-    //*Serial.println("SD card mounted successfully"); // Debug message on success
-    //*fp.mkdir(DATA_DIR);
-    //*infoSD();
-    //*res = true;
-  //*} else {
-    //*LOG_WRN("SD card mount failed");
-    //*Serial.println("SD card mount failed"); // Debug message on failure
-    //*res = false;
-  //*}
-//*#endif
-  //*return res;
-//*}
-
-
 
 static void listFolder(const char* rootDir) { 
   // list contents of folder
@@ -513,6 +560,166 @@ void uploadToComputer(const char* filepath) {
 }
 
 void uploadRecordings() {
+    // Check WiFi connection first
+    if (WiFi.status() != WL_CONNECTED) {
+        LOG_WRN("WiFi not connected, cannot upload files");
+        return;
+    }
+    
+    Serial.println("Starting file upload process...");
+    
+    // Find the latest recording folder (today's folder)
+    char todayFolder[FILE_NAME_LEN];
+    dateFormat(todayFolder, sizeof(todayFolder), true);
+    
+    File root = SD_MMC.open(todayFolder);
+    if (!root) {
+        LOG_WRN("Failed to open today's folder: %s", todayFolder);
+        return;
+    }
+    
+    if (!root.isDirectory()) {
+        LOG_WRN("%s is not a directory", todayFolder);
+        root.close();
+        return;
+    }
+    
+    // Count files to upload
+    int fileCount = 0;
+    File file = root.openNextFile();
+    while (file) {
+        if (!file.isDirectory() && strstr(file.name(), AVI_EXT)) {
+            fileCount++;
+        }
+        file.close();
+        file = root.openNextFile();
+    }
+    
+    // Reset directory reading
+    root.close();
+    root = SD_MMC.open(todayFolder);
+    
+    if (fileCount == 0) {
+        LOG_INF("No files to upload in %s", todayFolder);
+        root.close();
+        return;
+    }
+    
+    LOG_INF("Found %d files to upload in %s", fileCount, todayFolder);
+    
+    // Upload each file
+    int uploadedCount = 0;
+    file = root.openNextFile();
+    while (file) {
+        if (!file.isDirectory() && strstr(file.name(), AVI_EXT)) {
+            char filepath[FILE_NAME_LEN];
+            snprintf(filepath, FILE_NAME_LEN, "%s/%s", todayFolder, file.name());
+            
+            // Get file size
+            size_t fileSize = file.size();
+            if (fileSize > 0) {
+                LOG_INF("Uploading file: %s (%s)", filepath, fmtSize(fileSize));
+                
+                HTTPClient http;
+                
+                // Create URL with query parameters for additional info
+                char uploadUrl[200];
+                snprintf(uploadUrl, sizeof(uploadUrl), 
+                         "http://192.168.1.193:8000/upload?device=%s&size=%u&time=%u", 
+                         hostName, fileSize, (uint32_t)getEpoch());
+                         
+                http.begin(uploadUrl);
+                http.addHeader("Content-Type", "application/octet-stream");
+                http.addHeader("X-Filename", file.name());
+                
+                // Set timeout appropriately for large files
+                http.setTimeout(min(60000, fileSize / 1024 + 10000)); // 10s + 1s per KB
+                
+                // Upload with chunked transfer
+                const size_t CHUNK_SIZE = 8192;
+                uint8_t* buffer = (uint8_t*)ps_malloc(CHUNK_SIZE);
+                
+                if (!buffer) {
+                    LOG_WRN("Failed to allocate buffer for file upload");
+                    file.close();
+                    http.end();
+                    continue;
+                }
+                
+                // Use chunked upload
+                http.useHTTP10(false);
+                http.setIsChunkedTransfer(true);
+                
+                // Start the request
+                int httpCode = http.startRequest("POST");
+                
+                if (httpCode == HTTP_CODE_OK) {
+                    size_t bytesRemaining = fileSize;
+                    size_t pos = 0;
+                    bool uploadSuccess = true;
+                    
+                    while (bytesRemaining > 0) {
+                        file.seek(pos);
+                        size_t bytesToRead = min(CHUNK_SIZE, bytesRemaining);
+                        size_t bytesRead = file.read(buffer, bytesToRead);
+                        
+                        if (bytesRead > 0) {
+                            if (!http.sendRequestChunk((const uint8_t*)buffer, bytesRead)) {
+                                LOG_WRN("Failed to send chunk at position %u", pos);
+                                uploadSuccess = false;
+                                break;
+                            }
+                            
+                            bytesRemaining -= bytesRead;
+                            pos += bytesRead;
+                            
+                            // Show progress periodically
+                            if (pos % (CHUNK_SIZE * 10) == 0 || bytesRemaining == 0) {
+                                LOG_INF("Upload progress: %u%%", 
+                                        (uint8_t)((fileSize - bytesRemaining) * 100 / fileSize));
+                            }
+                            
+                            // Yield to prevent watchdog trigger
+                            delay(1);
+                        } else {
+                            LOG_WRN("Failed to read chunk at position %u", pos);
+                            uploadSuccess = false;
+                            break;
+                        }
+                    }
+                    
+                    // Finish the request
+                    if (uploadSuccess) {
+                        http.endRequest();
+                        httpCode = http.getResponse();
+                        
+                        if (httpCode == HTTP_CODE_OK) {
+                            LOG_INF("Successfully uploaded: %s", filepath);
+                            uploadedCount++;
+                        } else {
+                            LOG_WRN("Upload completed but server returned: %d", httpCode);
+                        }
+                    }
+                } else {
+                    LOG_WRN("Failed to start upload, code: %d", httpCode);
+                }
+                
+                free(buffer);
+                http.end();
+            } else {
+                LOG_WRN("Empty file, skipping: %s", filepath);
+            }
+        }
+        
+        file.close();
+        file = root.openNextFile();
+    }
+    
+    root.close();
+    LOG_INF("Upload session complete. Uploaded %d out of %d files", uploadedCount, fileCount);
+}
+
+/*void uploadRecordings() {
     File root = SD_MMC.open("/data"); // Changed from SD to SD_MMC
     if (!root) {
         LOG_WRN("Failed to open /data");
