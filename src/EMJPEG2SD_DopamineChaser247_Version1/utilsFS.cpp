@@ -84,6 +84,7 @@ static void infoSD() {
  //J.I.C.* return res;
 //J.I.C.*}
 //Grok aided and recommended modification to add debugging function statements to SD initiation 04/13/25
+
 static bool prepSD_MMC() {
   bool res = false;
 #if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)
@@ -109,24 +110,34 @@ static bool prepSD_MMC() {
 #endif
 #endif
   
-  Serial.println("Attempting to initialize SD card..."); // Debug message before init
-  res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
-#if defined(CAMERA_MODEL_AI_THINKER)
-  pinMode(4, OUTPUT);
-  digitalWrite(4, 0); // set lamp pin fully off as sd_mmc library still initialises pin 4 in 1 line mode
-#endif 
-  if (res) {
-    Serial.println("SD card mounted successfully"); // Debug message on success
-    fp.mkdir(DATA_DIR);
-    infoSD();
-    res = true;
-  } else {
-    LOG_WRN("SD card mount failed");
-    Serial.println("SD card mount failed"); // Debug message on failure
-    res = false;
-  }
-#endif
-  return res;
+  //*Serial.println("Attempting to initialize SD card..."); // Debug message before init
+  //*res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
+//*#if defined(CAMERA_MODEL_AI_THINKER)
+  //*pinMode(4, OUTPUT);
+  //*digitalWrite(4, 0); // set lamp pin fully off as sd_mmc library still initialises pin 4 in 1 line mode
+//*#endif 
+  //*if (res) {
+    //*Serial.println("SD card mounted successfully"); // Debug message on success
+    //*fp.mkdir(DATA_DIR);
+    //*infoSD();
+    //*res = true;
+  //*} else {
+    //*LOG_WRN("SD card mount failed");
+    //*Serial.println("SD card mount failed"); // Debug message on failure
+    //*res = false;
+  //*}
+//*#endif
+  //*return res;
+//*}
+
+bool beginSD() {
+    Serial.println("Attempting to initialize SD card in 4-bit mode...");
+    if (!SD_MMC.begin("/sdcard", false)) { // false enables 4-bit mode
+        Serial.println("SD card mount failed");
+        return false;
+    }
+    Serial.println("SD card mounted successfully");
+    return true;
 }
 
 static void listFolder(const char* rootDir) { 

@@ -912,7 +912,7 @@ voltPin~~3~N~ADC Pin used for battery voltage
 voltUse~0~3~C~Use Voltage check
 wakePin~~3~N~Pin used for to wake app from sleep
 wakeUse~0~3~C~Deep sleep app during night
-mqtt_active~0~2~C~Mqtt enabled
+//* mqtt_active~0~2~C~Mqtt
 mqtt_broker~~2~T~Mqtt server ip to connect
 mqtt_port~1883~2~N~Mqtt server port
 mqtt_user~~2~T~Mqtt user name
