@@ -8,11 +8,13 @@
 */
 
 #include "appGlobals.h"
+#include <esp_task_wdt.h>
 
 unsigned long lastUpload = 0;
 const unsigned long uploadInterval = 60 * 1000; // 1 minute for testing
 
 void setup() {
+  Serial.begin(115200);
   logSetup();
   LOG_INF("Selected board %s", CAM_BOARD);
   // prep storage
@@ -82,9 +84,13 @@ void setup() {
  #endif
 #endif
     checkMemory();
-  }
+  esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = 30000, // 30 seconds
+        .idle_core_mask = 0, // No specific core restrictions
+        .trigger_panic = false // Disable panic on timeout
+  };
   //* Disable Watchdog Temporarily (Debugging)
-  esp_task_wdt_init(30, false); // Set watchdog timeout to 30s, disable panic 
+  esp_task_wdt_init(&wdt_config); // Set watchdog timeout to 30s, disable panic 
 }
 
 void loop() {

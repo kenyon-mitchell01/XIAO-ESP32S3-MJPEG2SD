@@ -317,6 +317,9 @@ extern uint8_t lightLevel;  // Light level for night mode detection
 extern bool motionTriggeredAudio; // Flag for audio triggered by motion
 extern bool useMotion;     // Enable/disable motion detection
 
+enum RecordState { IDLE, RECORDING, COOLDOWN };
+extern RecordState recordState;
+
 extern uint8_t minSeconds;     // Minimum recording duration
 extern bool stopPlayback;  // Flag to stop playback
 extern int ampVol;         // Amplifier volume

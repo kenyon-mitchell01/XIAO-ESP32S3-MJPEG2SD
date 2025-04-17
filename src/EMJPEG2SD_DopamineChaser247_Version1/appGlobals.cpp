@@ -12,3 +12,4 @@ bool stopPlayback = false;  // Playback stop flag
 int ampVol = 0;             // Default amplifier volume
 int micGain = 0;            // Default microphone gain
 bool nightTime = false;     // Default night mode status
+RecordState recordState = IDLE; // Initialize to IDLE
