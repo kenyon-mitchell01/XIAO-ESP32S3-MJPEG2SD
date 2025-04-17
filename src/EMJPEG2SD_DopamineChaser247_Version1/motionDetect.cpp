@@ -39,13 +39,13 @@ using namespace std;
 #define JPEG_QUAL 80 // % quality for generated motion detect jpeg
   
 // motion recording parameters
-int detectMotionFrames = 5; // min sequence of changed frames to confirm motion 
+int detectMotionFrames = 3; // min sequence of changed frames to confirm motion 
 int detectNightFrames = 10; // frames of sequential darkness to avoid spurious day / night switching
 // define region of interest, ie exclude top and bottom of image from movement detection if required
 // divide image into detectNumBands horizontal bands, define start and end bands of interest, 1 = top
 int detectNumBands = 10;
-int detectStartBand = 3;
-int detectEndBand = 8; // inclusive
+int detectStartBand = 1;
+int detectEndBand = 10; // inclusive
 int detectChangeThreshold = 15; // min difference in pixel comparison to indicate a change
 //*uint8_t colorDepth; // set by depthColor config
 static size_t stride;
@@ -201,6 +201,17 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   // compare each pixel in current frame with previous frame 
   dTime = millis();
   int changeCount = 0;
+
+    //Debug Output to monitor motion detection
+    Serial.print("Changed pixels: ");
+    Serial.println(changeCount);
+    Serial.print("Threshold: ");
+    Serial.println(moveThreshold);
+    if (changeCount > moveThreshold) {
+    Serial.println("Motion detected!");
+    } else {
+    Serial.println("No motion detected.");
+    }
   // set horizontal region of interest in image 
   uint16_t startPixel = (RESIZE_DIM*(detectStartBand-1)/detectNumBands) * RESIZE_DIM * colorDepth;
   uint16_t endPixel = (RESIZE_DIM*(detectEndBand)/detectNumBands) * RESIZE_DIM * colorDepth;

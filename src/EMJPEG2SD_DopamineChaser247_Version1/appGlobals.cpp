@@ -1,7 +1,7 @@
 #include "appGlobals.h"
 
 // Define global variables
-float motionVal = 0.0;      // Motion sensitivity (%)
+float motionVal = 5.0;      // Motion sensitivity (%)
 uint8_t colorDepth = 0;     // Camera color depth
 uint8_t nightSwitch = 0;    // Night/day switch threshold
 uint8_t lightLevel = 0;     // Light level
