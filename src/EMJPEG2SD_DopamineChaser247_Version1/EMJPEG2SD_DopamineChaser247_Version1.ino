@@ -85,9 +85,7 @@ void setup() {
 #endif
     checkMemory();
 
-    
-void setup() {
-    Serial.begin(115200);
+  }  
   esp_task_wdt_config_t wdt_config = {
         .timeout_ms = 30000, // 30 seconds
         .idle_core_mask = 0, // No specific core restrictions
