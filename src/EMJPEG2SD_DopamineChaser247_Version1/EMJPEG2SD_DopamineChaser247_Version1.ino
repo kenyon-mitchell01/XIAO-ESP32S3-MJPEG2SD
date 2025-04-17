@@ -93,6 +93,12 @@ void setup() {
   };
   //* Disable Watchdog Temporarily (Debugging)
   esp_task_wdt_init(&wdt_config); // Set watchdog timeout to 30s, disable panic 
+   // Add this line before vTaskDelete(NULL)
+  optimizeTasksAndMemory();
+    
+    // End with this
+  vTaskDelete(NULL);
+}
 }
 
 void loop() {
@@ -104,11 +110,11 @@ void loop() {
     lastUpload = now;
   }
   delay(1000);
-  vTaskDelete(NULL); // free 8k ram
+
+  vTaskDelete(NULL);
 }
 
 // Add this to EMJPEG2SD_DopamineChaser247_Version1.ino
-
 void optimizeTasksAndMemory() {
     // Reduce number of tasks by disabling unnecessary features
     Serial.println("Optimizing tasks and memory usage...");
@@ -191,17 +197,4 @@ void optimizeTasksAndMemory() {
     Serial.printf("Free PSRAM: %u\n", ESP.getFreePsram());
     
     Serial.println("Task and memory optimization complete");
-}
-
-// Then modify the setup() function in EMJPEG2SD_DopamineChaser247_Version1.ino
-// by adding this line before the end:
-
-void setup() {
-    // Existing code...
-    
-    // Add this line before vTaskDelete(NULL)
-    optimizeTasksAndMemory();
-    
-    // End with this
-    vTaskDelete(NULL);
 }

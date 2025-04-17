@@ -427,7 +427,6 @@ static void processFrame() {
     // Get camera frame
     camera_fb_t* fb = esp_camera_fb_get();
     if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) {
-        // Invalid frame, just return
         Serial.println("Camera capture failed or invalid frame");
         if (fb) esp_camera_fb_return(fb);
         return;
@@ -451,39 +450,37 @@ static void processFrame() {
         doKeepFrame = false;
     }
 
-    // State machine for recording
-    static uint32_t stateStartTime = 0;  // Time when current state started
-    static bool motionDetected = false;  // Current motion detection status
-    
-    // Check for motion periodically based on current state
+    // Current time for state transitions
     uint32_t currentTime = millis();
+    bool motionDetected = false;
     bool checkForMotion = false;
     
+    // Determine when to check for motion
     switch (recordState) {
         case IDLE:
-            // In IDLE state, check motion at the normal rate
+            // In IDLE state, always check motion
             checkForMotion = true;
             break;
             
         case RECORDING:
-            // During recording, only check motion every moveStopSecs
+            // During recording, only check motion periodically
             if (currentTime - lastMotionCheckTime >= (moveStopSecs * 1000)) {
                 checkForMotion = true;
                 lastMotionCheckTime = currentTime;
             }
             
             // Check if we've exceeded maximum recording time
-            if (currentTime - recordingStartTime >= MAX_RECORDING_TIME_MS) {
+            if (currentTime - recordingStartTime >= (minSeconds * 1000 * 10)) { // 10x min time as max
                 Serial.println("Max recording time reached, closing file");
                 closeAvi();
                 recordState = COOLDOWN;
-                stateStartTime = currentTime;
+                recordingStartTime = currentTime; // Reuse as cooldown start time
             }
             break;
             
         case COOLDOWN:
-            // In COOLDOWN state, wait for the cooldown period to expire
-            if (currentTime - stateStartTime >= COOLDOWN_TIME_MS) {
+            // In COOLDOWN state, wait for cooldown period (5 seconds)
+            if (currentTime - recordingStartTime >= 5000) { // 5 second cooldown
                 Serial.println("Cooldown complete, returning to IDLE");
                 recordState = IDLE;
             }
@@ -492,29 +489,33 @@ static void processFrame() {
     
     // Check for motion if needed
     if (checkForMotion && useMotion) {
-        motionDetected = checkMotion(fb, motionDetected);
+        motionDetected = checkMotion(fb, recordState == RECORDING);
         motionTriggeredAudio = motionDetected; // For audio recording
+        lastMotionCheckTime = currentTime;
     } else if (!useMotion && checkForMotion) {
         // Just calculate light level
         checkMotion(fb, false, true);
     }
     
-#if INCLUDE_PERIPH
-    // Handle PIR sensor if enabled
+#if INCLUDE_PERIPH  
+    bool pirDetected = false;
     if (pirUse) {
-        bool pirDetected = getPIRval();
-        if (pirDetected && !motionDetected) {
+        pirDetected = getPIRval();
+        if (pirDetected && recordState == IDLE) {
             // PIR detected motion
-            motionDetected = true;
             if (lampAuto && nightTime) setLamp(lampLevel);
             notifyMotion(fb);
         }
     }
 #endif
 
-    // State transitions based on motion and force record
+    // Determine if we should be recording
     bool shouldRecord = motionDetected || forceRecord;
+#if INCLUDE_PERIPH
+    shouldRecord = shouldRecord || pirDetected;
+#endif
     
+    // State machine transitions
     switch (recordState) {
         case IDLE:
             if (shouldRecord) {
@@ -548,28 +549,26 @@ static void processFrame() {
             break;
             
         case RECORDING:
-            if (!shouldRecord) {
-                // Check if we've recorded for minimum time
-                if (currentTime - recordingStartTime >= MIN_RECORDING_TIME_MS) {
-                    // Stop recording
-                    Serial.println("Motion stopped, finishing recording");
-                    closeAvi();
-                    recordState = COOLDOWN;
-                    stateStartTime = currentTime;
-                    
-#if INCLUDE_PERIPH
-                    if (lampAuto) setLamp(0); // switch off lamp
-                    buzzerAlert(false); // switch off buzzer
-#endif
-                }
-            }
-            
             // Always save frames while in RECORDING state
             saveFrame(fb);
             
+            // Check if we should stop recording (no motion and min time reached)
+            if (!shouldRecord && (currentTime - recordingStartTime >= (minSeconds * 1000))) {
+                Serial.println("Motion stopped, finishing recording");
+                closeAvi();
+                recordState = COOLDOWN;
+                recordingStartTime = currentTime; // Reuse as cooldown start time
+                
+#if INCLUDE_PERIPH
+                if (lampAuto) setLamp(0); // switch off lamp
+                buzzerAlert(false); // switch off buzzer
+#endif
+            }
+            
 #if INCLUDE_PERIPH
             // Turn off buzzer after the specified duration
-            if (buzzerUse && (currentTime - recordingStartTime) / 1000 >= buzzerDuration) {
+            if (buzzerUse && buzzerDuration > 0 && 
+                (currentTime - recordingStartTime) / 1000 >= buzzerDuration) {
                 buzzerAlert(false);
             }
 #endif
@@ -580,10 +579,12 @@ static void processFrame() {
                 LOG_INF("Auto closed recording after %u frames", maxFrames);
                 closeAvi();
                 recordState = COOLDOWN;
-                stateStartTime = currentTime;
+                recordingStartTime = currentTime;
                 forceRecord = false; // Clear the force record flag
             }
             break;
+            
+        // COOLDOWN state handled above
     }
     
     // Return the frame buffer to the camera
@@ -788,6 +789,18 @@ static void playbackTask(void* parameter) {
 }
 
 /******************* Startup ********************/
+
+static void captureTask(void* parameter) {
+  // woken by frame timer when time to capture frame
+  uint32_t ulNotifiedValue;
+  while (true) {
+    ulNotifiedValue = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (ulNotifiedValue > FB_CNT) ulNotifiedValue = FB_CNT; // prevent too big queue if FPS excessive
+    // may be more than one isr outstanding if the task delayed by SD write or jpeg decode
+    while (ulNotifiedValue-- > 0) processFrame();
+  }
+  vTaskDelete(NULL);
+}
 
 static void startSDtasks() {
   // tasks to manage SD card operation

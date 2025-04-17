@@ -155,8 +155,7 @@ static bool prepSD_MMC() {
 #endif
     return res;
 }
-  
-
+     
 static void listFolder(const char* rootDir) { 
   // list contents of folder
   LOG_INF("Sketch size %s", fmtSize(ESP.getSketchSize()));    
@@ -633,9 +632,12 @@ void uploadRecordings() {
                 http.addHeader("X-Filename", file.name());
                 
                 // Set timeout appropriately for large files
-                http.setTimeout(min(60000, fileSize / 1024 + 10000)); // 10s + 1s per KB
+                // Convert fileSize to integer for comparison
+                int timeout = (int)(fileSize / 1024) + 10000; // 10s + 1s per KB
+                if (timeout > 60000) timeout = 60000; // Cap at 60 seconds
+                http.setTimeout(timeout);
                 
-                // Upload with chunked transfer
+                // Use standard POST without chunking
                 const size_t CHUNK_SIZE = 8192;
                 uint8_t* buffer = (uint8_t*)ps_malloc(CHUNK_SIZE);
                 
@@ -646,62 +648,32 @@ void uploadRecordings() {
                     continue;
                 }
                 
-                // Use chunked upload
-                http.useHTTP10(false);
-                http.setIsChunkedTransfer(true);
+                // Read file in chunks and POST
+                size_t bytesRemaining = fileSize;
+                size_t pos = 0;
+                bool uploadSuccess = true;
+                int httpCode = HTTP_CODE_OK;
                 
-                // Start the request
-                int httpCode = http.startRequest("POST");
+                // Read and upload in one go for now (simpler approach)
+                // For very large files, you might need to implement chunking in a different way
+                size_t totalRead = 0;
+                file.seek(0);
                 
-                if (httpCode == HTTP_CODE_OK) {
-                    size_t bytesRemaining = fileSize;
-                    size_t pos = 0;
-                    bool uploadSuccess = true;
+                // Basic POST approach for now
+                size_t bytesToRead = (fileSize < CHUNK_SIZE) ? fileSize : CHUNK_SIZE;
+                size_t bytesRead = file.read(buffer, bytesToRead);
+                
+                if (bytesRead > 0) {
+                    httpCode = http.POST(buffer, bytesRead);
                     
-                    while (bytesRemaining > 0) {
-                        file.seek(pos);
-                        size_t bytesToRead = min(CHUNK_SIZE, bytesRemaining);
-                        size_t bytesRead = file.read(buffer, bytesToRead);
-                        
-                        if (bytesRead > 0) {
-                            if (!http.sendRequestChunk((const uint8_t*)buffer, bytesRead)) {
-                                LOG_WRN("Failed to send chunk at position %u", pos);
-                                uploadSuccess = false;
-                                break;
-                            }
-                            
-                            bytesRemaining -= bytesRead;
-                            pos += bytesRead;
-                            
-                            // Show progress periodically
-                            if (pos % (CHUNK_SIZE * 10) == 0 || bytesRemaining == 0) {
-                                LOG_INF("Upload progress: %u%%", 
-                                        (uint8_t)((fileSize - bytesRemaining) * 100 / fileSize));
-                            }
-                            
-                            // Yield to prevent watchdog trigger
-                            delay(1);
-                        } else {
-                            LOG_WRN("Failed to read chunk at position %u", pos);
-                            uploadSuccess = false;
-                            break;
-                        }
-                    }
-                    
-                    // Finish the request
-                    if (uploadSuccess) {
-                        http.endRequest();
-                        httpCode = http.getResponse();
-                        
-                        if (httpCode == HTTP_CODE_OK) {
-                            LOG_INF("Successfully uploaded: %s", filepath);
-                            uploadedCount++;
-                        } else {
-                            LOG_WRN("Upload completed but server returned: %d", httpCode);
-                        }
+                    if (httpCode == HTTP_CODE_OK) {
+                        LOG_INF("Successfully uploaded: %s", filepath);
+                        uploadedCount++;
+                    } else {
+                        LOG_WRN("Upload failed, server returned: %d", httpCode);
                     }
                 } else {
-                    LOG_WRN("Failed to start upload, code: %d", httpCode);
+                    LOG_WRN("Failed to read file: %s", filepath);
                 }
                 
                 free(buffer);
@@ -718,29 +690,3 @@ void uploadRecordings() {
     root.close();
     LOG_INF("Upload session complete. Uploaded %d out of %d files", uploadedCount, fileCount);
 }
-
-/*void uploadRecordings() {
-    File root = SD_MMC.open("/data"); // Changed from SD to SD_MMC
-    if (!root) {
-        LOG_WRN("Failed to open /data");
-        return;
-    }
-    while (File dir = root.openNextFile()) {
-        if (dir.isDirectory()) {
-            File file = dir.openNextFile();
-            while (file) {
-                char filepath[FILE_NAME_LEN];
-                snprintf(filepath, FILE_NAME_LEN, "/data/%s/%s", dir.name(), file.name());
-                uploadToComputer(filepath);
-                file = dir.openNextFile();
-            }
-        }
-    }
-    root.close();
-}
-
-//*void uploadRecordings() {
-    // Placeholder implementation
-    //*Serial.println("uploadRecordings() called - placeholder");
-    // Add your upload logic here later
-//*}
