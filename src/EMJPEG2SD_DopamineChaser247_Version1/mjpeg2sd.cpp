@@ -458,22 +458,7 @@ void processFrame() {
     // Return the frame buffer
     esp_camera_fb_return(fb);
 }
-  // Manage recording state
-  if (recordState == RECORDING) {
-    if (millis() - recordStartTime >= RECORD_DURATION) {
-      stopRecording();
-      motionTriggeredAudio = false;
-      recordState = COOLDOWN;
-      recordStartTime = millis();
-      Serial.println("Recording stopped, entering cooldown.");
-    }
-  } else if (recordState == COOLDOWN) {
-    if (millis() - recordStartTime >= COOLDOWN_DURATION) {
-      recordState = IDLE;
-      Serial.println("Cooldown ended, ready for new motion.");
-    }
-  }
-}
+
 
 //processFrame() function was completely replased by a new function written by Grok 04/15/25 to accomplish my requested customizations. 
 //*static boolean processFrame() {
