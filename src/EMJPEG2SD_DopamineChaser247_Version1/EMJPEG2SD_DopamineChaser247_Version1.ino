@@ -99,7 +99,6 @@ void setup() {
     // End with this
   vTaskDelete(NULL);
 }
-}
 
 void loop() {
   // confirm not blocked in setup
