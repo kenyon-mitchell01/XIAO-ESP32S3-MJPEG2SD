@@ -202,16 +202,7 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
   dTime = millis();
   int changeCount = 0;
 
-    //Debug Output to monitor motion detection
-    Serial.print("Changed pixels: ");
-    Serial.println(changeCount);
-    Serial.print("Threshold: ");
-    Serial.println(moveThreshold);
-    if (changeCount > moveThreshold) {
-    Serial.println("Motion detected!");
-    } else {
-    Serial.println("No motion detected.");
-    }
+
   // set horizontal region of interest in image 
   uint16_t startPixel = (RESIZE_DIM*(detectStartBand-1)/detectNumBands) * RESIZE_DIM * colorDepth;
   uint16_t endPixel = (RESIZE_DIM*(detectEndBand)/detectNumBands) * RESIZE_DIM * colorDepth;
@@ -238,6 +229,18 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
       }
     }
   }
+
+    Serial.print("Changed pixels: ");
+    Serial.println(changeCount);
+    Serial.print("Threshold: ");
+    Serial.println(moveThreshold);
+    if (changeCount > moveThreshold) {
+    Serial.println("Motion detected!");
+    } else {
+    Serial.println("No motion detected.");
+    }
+
+
   lightLevel = (lux*100)/(RESIZE_DIM_SQ*255); // light value as a %
   nightTime = isNight(nightSwitch);
   memcpy(prevBuff, currBuff, resizeDimLen); // save image for next comparison 

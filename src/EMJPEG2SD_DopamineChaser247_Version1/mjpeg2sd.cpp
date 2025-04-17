@@ -418,29 +418,46 @@ void stopRecording() {
 
 // New processFrame() as the first step in implementing the "motion dection initiated 60s of video and audio recording" plan 04-16-25
 void processFrame() {
+    // Capture a frame from the camera
     camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Camera capture failed");
-    return;
+    if (!fb) {
+        Serial.println("Camera capture failed");
+        return;
     }
-  // Check for motion if enabled
-  if (useMotion) {
-    bool motionDetected = checkMotion(fb, false, false);
-    //*float changedPixels = calculateMotion(); // Placeholder for motion calculation
-    Serial.print("Changed pixels: ");
-    Serial.println(changedPixels);
 
-    if (changedPixels > motionVal) {
-      if (recordState == IDLE) {
-        recordState = RECORDING;
-        recordStartTime = millis();
-        startRecording();
-        motionTriggeredAudio = true; // Trigger audio if applicable
-        Serial.println("Motion detected! Recording started.");
-      }
+    // Check for motion if motion detection is enabled
+    if (useMotion) {
+        bool motionDetected = checkMotion(fb, false, false);
+        Serial.print("Motion detected: ");
+        Serial.println(motionDetected ? "Yes" : "No");
+
+        // Start recording if motion is detected and not already recording
+        if (motionDetected && recordState == IDLE) {
+            recordState = RECORDING;
+            recordStartTime = millis();
+            startRecording();
+            Serial.println("Motion detected! Recording started.");
+        }
     }
-  }
 
+    // Manage recording state
+    if (recordState == RECORDING) {
+        if (millis() - recordStartTime >= RECORD_DURATION) {
+            stopRecording();
+            recordState = COOLDOWN;
+            recordStartTime = millis();
+            Serial.println("Recording stopped, entering cooldown.");
+        }
+    } else if (recordState == COOLDOWN) {
+        if (millis() - recordStartTime >= COOLDOWN_DURATION) {
+            recordState = IDLE;
+            Serial.println("Cooldown ended, ready for new motion.");
+        }
+    }
+
+    // Return the frame buffer
+    esp_camera_fb_return(fb);
+}
   // Manage recording state
   if (recordState == RECORDING) {
     if (millis() - recordStartTime >= RECORD_DURATION) {
