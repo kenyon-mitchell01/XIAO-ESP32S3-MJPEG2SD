@@ -230,15 +230,15 @@ bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
     }
   }
 
-    Serial.print("Changed pixels: ");
-    Serial.println(changeCount);
-    Serial.print("Threshold: ");
-    Serial.println(moveThreshold);
-    if (changeCount > moveThreshold) {
-    Serial.println("Motion detected!");
-    } else {
-    Serial.println("No motion detected.");
-    }
+    //*Serial.print("Changed pixels: ");
+    //*Serial.println(changeCount);
+    //*Serial.print("Threshold: ");
+    //*Serial.println(moveThreshold);
+    //*if (changeCount > moveThreshold) {
+    //*Serial.println("Motion detected!");
+    //*} else {
+    //*Serial.println("No motion detected.");
+    //*}
 
 
   lightLevel = (lux*100)/(RESIZE_DIM_SQ*255); // light value as a %

@@ -414,25 +414,27 @@ void startRecording() {
 void stopRecording() {
     Serial.println("Stopping recording...");
     // Add actual recording stop logic here (e.g., close the file)
+    // Example: Close file
+    // file.close(); // Replace with your actual SD write logic
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Yield to prevent watchdog
 }
 
-// New processFrame() as the first step in implementing the "motion dection initiated 60s of video and audio recording" plan 04-16-25
 void processFrame() {
-    // Capture a frame from the camera
+    // Capture frame
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
         Serial.println("Camera capture failed");
         return;
     }
 
-    // Check for motion if motion detection is enabled
-    if (useMotion) {
+    // Only check for motion if in IDLE state and motion detection is enabled
+    if (useMotion && recordState == IDLE) {
         bool motionDetected = checkMotion(fb, false, false);
-        Serial.print("Motion detected: ");
-        Serial.println(motionDetected ? "Yes" : "No");
+        // Commented out debug logs to reduce serial monitor noise
+        // Serial.print("Motion detected: ");
+        // Serial.println(motionDetected ? "Yes" : "No");
 
-        // Start recording if motion is detected and not already recording
-        if (motionDetected && recordState == IDLE) {
+        if (motionDetected) {
             recordState = RECORDING;
             recordStartTime = millis();
             startRecording();
@@ -442,14 +444,14 @@ void processFrame() {
 
     // Manage recording state
     if (recordState == RECORDING) {
-        if (millis() - recordStartTime >= RECORD_DURATION) {
+        if (millis() - recordStartTime >= 60000) { // 60 seconds
             stopRecording();
             recordState = COOLDOWN;
             recordStartTime = millis();
             Serial.println("Recording stopped, entering cooldown.");
         }
     } else if (recordState == COOLDOWN) {
-        if (millis() - recordStartTime >= COOLDOWN_DURATION) {
+        if (millis() - recordStartTime >= 5000) { // 5-second cooldown
             recordState = IDLE;
             Serial.println("Cooldown ended, ready for new motion.");
         }
@@ -458,8 +460,6 @@ void processFrame() {
     // Return the frame buffer
     esp_camera_fb_return(fb);
 }
-
-
 //processFrame() function was completely replased by a new function written by Grok 04/15/25 to accomplish my requested customizations. 
 //*static boolean processFrame() {
   // get camera frame

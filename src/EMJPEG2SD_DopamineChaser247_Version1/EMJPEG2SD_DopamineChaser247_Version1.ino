@@ -82,7 +82,9 @@ void setup() {
  #endif
 #endif
     checkMemory();
-  } 
+  }
+  //* Disable Watchdog Temporarily (Debugging)
+  esp_task_wdt_init(30, false); // Set watchdog timeout to 30s, disable panic 
 }
 
 void loop() {
