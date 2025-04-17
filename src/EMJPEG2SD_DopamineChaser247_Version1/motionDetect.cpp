@@ -19,7 +19,7 @@
  
  s60sc 2020, 2023
 */
-
+#include <Arduino.h>
 #include "appGlobals.h"
 #include "motionDetect.h"
 

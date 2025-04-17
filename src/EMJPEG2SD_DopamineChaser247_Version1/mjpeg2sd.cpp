@@ -401,7 +401,7 @@ static bool closeAvi() {
 
 //Debug for processFrame() to be shown in serial monitor 04-16-2025
 //*enum RecordState { IDLE, RECORDING, COOLDOWN };
-RecordState recordState = IDLE;
+//*RecordState recordState = IDLE;
 unsigned long recordStartTime = 0;
 const unsigned long RECORD_DURATION = 60000; // 60 seconds
 const unsigned long COOLDOWN_DURATION = 5000; // 5 seconds

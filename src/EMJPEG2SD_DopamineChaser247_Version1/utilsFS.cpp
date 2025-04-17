@@ -15,7 +15,9 @@
 // s60sc 2021, 2022, 2025
 
 #include "appGlobals.h"
-#include <SD.h>
+#include <Arduino.h> // For Serial
+#include <SD_MMC.h>  // For SD_MMC
+
 
 // Storage settings
 int sdMinCardFreeSpace = 100; // Minimum amount of card free Megabytes before sdFreeSpaceMode action is enabled
@@ -44,46 +46,7 @@ static void infoSD() {
   }
 #endif
 }
-//Original SD initialization Code
-//J.I.C.*static bool prepSD_MMC() {
-  //J.I.C.*bool res = false;
-//J.I.C.*#if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)
-  //J.I.C.*if (psramFound()) heap_caps_malloc_extmem_enable(MIN_RAM); // small number to force vector into psram
-  //J.I.C.*fileVec.reserve(1000);
-  //J.I.C.*if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
-//J.I.C.*#if CONFIG_IDF_TARGET_ESP32S3
-//J.I.C.*#if !defined(SD_MMC_CLK)
-  //J.I.C.*LOG_WRN("SD card pins not defined");
-  //J.I.C.*return false;
-//J.I.C.*#else
- //J.I.C.*#if defined(SD_MMC_D1)
-  // assume 4 bit mode
-  //J.I.C.*SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
-  //J.I.C.*use1bitMode = false;
- //J.I.C.*#else
-  // assume 1 bit mode
-  //J.I.C.*SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
- //J.I.C.*#endif
-//J.I.C.*#endif
-//J.I.C.*#endif
-  
-  //J.I.C.*res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
-//J.I.C.*#if defined(CAMERA_MODEL_AI_THINKER)
-  //J.I.C.*pinMode(4, OUTPUT);
-  //J.I.C.*digitalWrite(4, 0); // set lamp pin fully off as sd_mmc library still initialises pin 4 in 1 line mode
-//J.I.C.*#endif 
-  //J.I.C.*if (res) {
-    //J.I.C.*fp.mkdir(DATA_DIR);
-    //J.I.C.*infoSD();
-    //J.I.C.*res = true;
-  //J.I.C.*} else {
-    //J.I.C.*LOG_WRN("SD card mount failed");
-    //J.I.C.*res = false;
-  //J.I.C.*}
-//J.I.C.*#endif
- //J.I.C.* return res;
-//J.I.C.*}
-//Grok aided and recommended modification to add debugging function statements to SD initiation 04/13/25
+
 
 static bool prepSD_MMC() {
     bool res = false;
@@ -92,22 +55,22 @@ static bool prepSD_MMC() {
     fileVec.reserve(1000);
     if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
 #if CONFIG_IDF_TARGET_ESP32S3
-#if !defined(SD_MMC_CLK)
-    LOG_WRN("SD card pins not defined");
-    Serial.println("SD card pins not defined - cannot initialize SD card");
-    return false;
-#else
-    #if defined(SD_MMC_D1)
-    // 4-bit mode
-    SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
-    use1bitMode = false;
-    Serial.println("Configuring SD card in 4-bit mode");
+    #if !defined(SD_MMC_CLK)
+        LOG_WRN("SD card pins not defined");
+        Serial.println("SD card pins not defined - cannot initialize SD card");
+        return false;
     #else
-    // 1-bit mode
-    SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
-    Serial.println("Configuring SD card in 1-bit mode");
+        #if defined(SD_MMC_D1)
+            // 4-bit mode
+            SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
+            use1bitMode = false;
+            Serial.println("Configuring SD card in 4-bit mode");
+        #else
+            // 1-bit mode
+            SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+            Serial.println("Configuring SD card in 1-bit mode");
+        #endif
     #endif
-#endif
 #endif
     Serial.println("Attempting to initialize SD card...");
     res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
@@ -145,24 +108,7 @@ static bool prepSD_MMC() {
   //*return res;
 //*}
 
-Serial.println("Attempting to initialize SD card in 4-bit mode..."); // Updated debug message
-res = SD_MMC.begin("/sdcard", false, formatIfMountFailed, sdmmcFreq); // Set use1bitMode to false for 4-bit mode
-#if defined(CAMERA_MODEL_AI_THINKER)
-  pinMode(4, OUTPUT);
-  digitalWrite(4, 0); // This may no longer be needed in 4-bit mode, but keep it if GPIO 4 is still affected
-#endif 
-if (res) {
-  Serial.println("SD card mounted successfully");
-  fp.mkdir(DATA_DIR);
-  infoSD();
-  res = true;
-} else {
-  LOG_WRN("SD card mount failed");
-  Serial.println("SD card mount failed");
-  res = false;
-}
-#endif
-return res;
+
 
 static void listFolder(const char* rootDir) { 
   // list contents of folder
@@ -508,82 +454,82 @@ esp_err_t downloadFile(File& df, httpd_req_t* req) {
 }
 
 void uploadToComputer(const char* filepath) {
-  if (WiFi.status() != WL_CONNECTED) {
-    LOG_WRN("WiFi not connected");
-    return;
-  }
+    if (WiFi.status() != WL_CONNECTED) {
+        LOG_WRN("WiFi not connected");
+        return;
+    }
 
-  HTTPClient http;
-  http.begin("http://192.168.1.193:8000"); // Replace with your computer's IP
-  http.addHeader("Content-Type", "application/octet-stream");
-  http.addHeader("X-Filename", filepath);
+    HTTPClient http;
+    http.begin("http://192.168.1.193:8000"); // ***Replace with your computer's IP***
+    http.addHeader("Content-Type", "application/octet-stream");
+    http.addHeader("X-Filename", filepath);
 
-  File file = SD.open(filepath, FILE_READ);
-  if (!file) {
-    LOG_WRN("Failed to open file: %s", filepath);
-    http.end();
-    return;
-  }
+    File file = SD_MMC.open(filepath, FILE_READ); // Changed from SD to SD_MMC
+    if (!file) {
+        LOG_WRN("Failed to open file: %s", filepath);
+        http.end();
+        return;
+    }
 
-  // Get file size
-  size_t fileSize = file.size();
-  if (fileSize == 0) {
-    LOG_WRN("File is empty: %s", filepath);
+    // Get file size
+    size_t fileSize = file.size();
+    if (fileSize == 0) {
+        LOG_WRN("File is empty: %s", filepath);
+        file.close();
+        http.end();
+        return;
+    }
+
+    // Allocate buffer for the file (use PSRAM if available)
+    uint8_t* buffer = (uint8_t*)ps_malloc(fileSize);
+    if (!buffer) {
+        LOG_WRN("Failed to allocate buffer for file: %s", filepath);
+        file.close();
+        http.end();
+        return;
+    }
+
+    // Read the file into the buffer
+    size_t bytesRead = file.read(buffer, fileSize);
     file.close();
-    http.end();
-    return;
-  }
 
-  // Allocate buffer for the file (use PSRAM if available)
-  uint8_t* buffer = (uint8_t*)ps_malloc(fileSize);
-  if (!buffer) {
-    LOG_WRN("Failed to allocate buffer for file: %s", filepath);
-    file.close();
-    http.end();
-    return;
-  }
+    if (bytesRead != fileSize) {
+        LOG_WRN("Failed to read entire file: %s, read %u of %u bytes", filepath, bytesRead, fileSize);
+        free(buffer);
+        http.end();
+        return;
+    }
 
-  // Read the file into the buffer
-  size_t bytesRead = file.read(buffer, fileSize);
-  file.close();
+    // Send the file
+    int httpCode = http.POST(buffer, fileSize);
+    if (httpCode == HTTP_CODE_OK) {
+        LOG_INF("Uploaded: %s", filepath);
+    } else {
+        LOG_WRN("Upload failed, code: %d", httpCode);
+    }
 
-  if (bytesRead != fileSize) {
-    LOG_WRN("Failed to read entire file: %s, read %u of %u bytes", filepath, bytesRead, fileSize);
     free(buffer);
     http.end();
-    return;
-  }
-
-  // Send the file
-  int httpCode = http.POST(buffer, fileSize);
-  if (httpCode == HTTP_CODE_OK) {
-    LOG_INF("Uploaded: %s", filepath);
-  } else {
-    LOG_WRN("Upload failed, code: %d", httpCode);
-  }
-
-  free(buffer);
-  http.end();
 }
 
 void uploadRecordings() {
-  File root = SD.open("/data");
-  if (!root) {
-    LOG_WRN("Failed to open /data");
-    return;
-  }
-  while (File dir = root.openNextFile()) {
-    if (dir.isDirectory()) {
-      File file = dir.openNextFile();
-      while (file) {
-        char filepath[FILE_NAME_LEN];
-        snprintf(filepath, FILE_NAME_LEN, "/data/%s/%s", dir.name(), file.name());
-        uploadToComputer(filepath);
-        file = dir.openNextFile();
-      }
+    File root = SD_MMC.open("/data"); // Changed from SD to SD_MMC
+    if (!root) {
+        LOG_WRN("Failed to open /data");
+        return;
     }
-  }
-  root.close();
+    while (File dir = root.openNextFile()) {
+        if (dir.isDirectory()) {
+            File file = dir.openNextFile();
+            while (file) {
+                char filepath[FILE_NAME_LEN];
+                snprintf(filepath, FILE_NAME_LEN, "/data/%s/%s", dir.name(), file.name());
+                uploadToComputer(filepath);
+                file = dir.openNextFile();
+            }
+        }
+    }
+    root.close();
 }
 
 //*void uploadRecordings() {
