@@ -8,6 +8,7 @@
 
 #include "appGlobals.h"
 #include "motionDetect.h"
+#include "esp_camera.h" // For camera_fb_t
 
 // Define states
 #define STATE_IDLE 0
@@ -405,13 +406,27 @@ unsigned long recordStartTime = 0;
 const unsigned long RECORD_DURATION = 60000; // 60 seconds
 const unsigned long COOLDOWN_DURATION = 5000; // 5 seconds
 
+void startRecording() {
+    Serial.println("Starting recording...");
+    // Add actual recording start logic here (e.g., open a file on SD card)
+}
+
+void stopRecording() {
+    Serial.println("Stopping recording...");
+    // Add actual recording stop logic here (e.g., close the file)
+}
+
 // New processFrame() as the first step in implementing the "motion dection initiated 60s of video and audio recording" plan 04-16-25
 void processFrame() {
-  if (!captureFrame()) return;
-
+    camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Camera capture failed");
+    return;
+    }
   // Check for motion if enabled
   if (useMotion) {
-    float changedPixels = calculateMotion(); // Placeholder for motion calculation
+    bool motionDetected = checkMotion(fb, false, false);
+    //*float changedPixels = calculateMotion(); // Placeholder for motion calculation
     Serial.print("Changed pixels: ");
     Serial.println(changedPixels);
 
