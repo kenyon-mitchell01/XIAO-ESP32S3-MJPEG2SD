@@ -230,13 +230,15 @@
 #define PCLK_GPIO_NUM     13
 
 #define LED_GPIO_NUM 21
+
 //  Define SD Pins
 #define SD_MMC_CLK 7 
 #define SD_MMC_CMD 9
 #define SD_MMC_D0 8
-//#define SD_MMC_D1     
-//#define SD_MMC_D2    
-//#define SD_MMC_D3 
+#define SD_MMC_D1 1  // Added for 4-bit mode   
+#define SD_MMC_D2 2  // Added for 4-bit mode
+#define SD_MMC_D3 3  // Added for 4-bit mode
+
 // Define Mic Pins
 #define I2S_SD 41 // PDM Microphone
 #define I2S_WS 42

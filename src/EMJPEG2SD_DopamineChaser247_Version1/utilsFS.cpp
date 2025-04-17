@@ -86,29 +86,44 @@ static void infoSD() {
 //Grok aided and recommended modification to add debugging function statements to SD initiation 04/13/25
 
 static bool prepSD_MMC() {
-  bool res = false;
+    bool res = false;
 #if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)
-  if (psramFound()) heap_caps_malloc_extmem_enable(MIN_RAM); // small number to force vector into psram
-  fileVec.reserve(1000);
-  if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
+    if (psramFound()) heap_caps_malloc_extmem_enable(MIN_RAM);
+    fileVec.reserve(1000);
+    if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
 #if CONFIG_IDF_TARGET_ESP32S3
 #if !defined(SD_MMC_CLK)
-  LOG_WRN("SD card pins not defined");
-  Serial.println("SD card pins not defined - cannot initialize SD card"); // Debug message for missing pins
-  return false;
+    LOG_WRN("SD card pins not defined");
+    Serial.println("SD card pins not defined - cannot initialize SD card");
+    return false;
 #else
- #if defined(SD_MMC_D1)
-  // assume 4 bit mode
-  SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
-  use1bitMode = false;
-  Serial.println("Configuring SD card in 4-bit mode"); // Debug message for mode
- #else
-  // assume 1 bit mode
-  SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
-  Serial.println("Configuring SD card in 1-bit mode"); // Debug message for mode
- #endif
+    #if defined(SD_MMC_D1)
+    // 4-bit mode
+    SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
+    use1bitMode = false;
+    Serial.println("Configuring SD card in 4-bit mode");
+    #else
+    // 1-bit mode
+    SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+    Serial.println("Configuring SD card in 1-bit mode");
+    #endif
 #endif
 #endif
+    Serial.println("Attempting to initialize SD card...");
+    res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
+    if (res) {
+        Serial.println("SD card mounted successfully");
+        fp.mkdir(DATA_DIR);
+        infoSD();
+        res = true;
+    } else {
+        LOG_WRN("SD card mount failed");
+        Serial.println("SD card mount failed");
+        res = false;
+    }
+#endif
+    return res;
+}
   
   //*Serial.println("Attempting to initialize SD card..."); // Debug message before init
   //*res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
@@ -130,15 +145,24 @@ static bool prepSD_MMC() {
   //*return res;
 //*}
 
-bool beginSD() {
-    Serial.println("Attempting to initialize SD card in 4-bit mode...");
-    if (!SD_MMC.begin("/sdcard", false)) { // false enables 4-bit mode
-        Serial.println("SD card mount failed");
-        return false;
-    }
-    Serial.println("SD card mounted successfully");
-    return true;
+Serial.println("Attempting to initialize SD card in 4-bit mode..."); // Updated debug message
+res = SD_MMC.begin("/sdcard", false, formatIfMountFailed, sdmmcFreq); // Set use1bitMode to false for 4-bit mode
+#if defined(CAMERA_MODEL_AI_THINKER)
+  pinMode(4, OUTPUT);
+  digitalWrite(4, 0); // This may no longer be needed in 4-bit mode, but keep it if GPIO 4 is still affected
+#endif 
+if (res) {
+  Serial.println("SD card mounted successfully");
+  fp.mkdir(DATA_DIR);
+  infoSD();
+  res = true;
+} else {
+  LOG_WRN("SD card mount failed");
+  Serial.println("SD card mount failed");
+  res = false;
 }
+#endif
+return res;
 
 static void listFolder(const char* rootDir) { 
   // list contents of folder
