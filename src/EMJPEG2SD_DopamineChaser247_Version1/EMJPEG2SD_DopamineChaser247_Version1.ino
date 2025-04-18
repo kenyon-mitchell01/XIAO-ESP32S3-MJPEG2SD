@@ -15,13 +15,15 @@ const unsigned long uploadInterval = 60 * 1000; // 1 minute for testing
 
 void setup() {
   Serial.begin(115200);
-    
   delay(2000); // Wait 2 seconds to ensure Serial Monitor can connect
   
   Serial.println("Starting setup...");
-  Serial.println("Testing SD card in 4-bit mode with pins:");
-  Serial.printf("CLK: %d, CMD: %d, D0: %d, D1: %d, D2: %d, D3: %d\n", 
-               SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
+  Serial.println("Using SD card in 1-bit SPI mode with pins:");
+  Serial.printf("CLK: %d (GPIO7), CMD: %d (GPIO9), D0: %d (GPIO8)\n", 
+               SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+  Serial.println("Note: GPIO21 used for CS (not directly configured in SD_MMC)");
+  
+  // rest of your setup code
   logSetup();
   LOG_INF("Selected board %s", CAM_BOARD);
   // prep storage

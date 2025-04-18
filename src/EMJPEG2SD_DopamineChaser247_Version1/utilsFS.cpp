@@ -119,6 +119,8 @@ bool testSDCard() {
     return true;
 }
 
+
+
 //New prepSD_MMC() from Claude 3.7, 04/17/2025
 static bool prepSD_MMC() {
     bool res = false;
@@ -132,10 +134,7 @@ static bool prepSD_MMC() {
                  SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
     
     // XIAO ESP32-S3 uses GPIO21 for CS, but SD_MMC doesn't use CS directly
-    Serial.printf("Note: GPIO21 used for CS (not directly configured in SD_MMC)\n");
-    
-    // Update default frequency to optimize 1-bit mode
-    sdmmcFreq = 25000000; // Try 25MHz for better performance
+    Serial.println("Note: GPIO21 used for CS (not directly configured in SD_MMC)");
     
     // Configure pins for 1-bit mode
     SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
