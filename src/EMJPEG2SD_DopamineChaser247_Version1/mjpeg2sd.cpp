@@ -51,6 +51,8 @@ int tlPlaybackFPS;  // rate to playback the timelapse, min 1
 
 // status & control fields
 uint8_t FPS = 0;
+uint8_t saveFPS = 0; // used to reset FPS after playback
+
 //*bool nightTime = false;
 uint8_t fsizePtr; // index to frameData[]
 //uint8_t minSeconds = 30; // Match MIN_RECORDING_TIME
@@ -63,6 +65,27 @@ static int siodGpio = SIOD_GPIO_NUM;
 static int siocGpio = SIOC_GPIO_NUM;
 size_t maxFrameBuffSize;
 framesize_t maxFS = FRAMESIZE_SVGA; // default
+
+void controlFrameTimer(bool restartTimer) {
+  // frame timer control
+  static hw_timer_t* frameTimer = NULL;
+  // stop current timer
+  if (frameTimer) {
+    timerDetachInterrupt(frameTimer); 
+    timerEnd(frameTimer);
+    frameTimer = NULL;
+  }
+  if (restartTimer) {
+    // (re)start timer interrupt for required framerate
+    frameTimer = timerBegin(OneMHz); 
+    if (frameTimer) {
+      uint32_t frameInterval = OneMHz / FPS; // in units of us 
+      LOG_VRB("Frame timer interval %ums for FPS %u", frameInterval/1000, FPS); 
+      timerAttachInterrupt(frameTimer, &frameISR);
+      timerAlarm(frameTimer, frameInterval, true, 0); // micro seconds
+    } else LOG_ERR("Failed to setup frameTimer");
+  }
+}
 
 uint8_t setFPS(uint8_t val) {
   // change or retrieve FPS value
