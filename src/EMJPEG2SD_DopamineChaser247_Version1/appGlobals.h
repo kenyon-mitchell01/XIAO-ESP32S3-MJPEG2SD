@@ -8,24 +8,26 @@
 #ifndef APP_GLOBALS_H
 #define APP_GLOBALS_H
 
-//#define MIN_RECORDING_TIME 60000    // 60 seconds minimum recording time
-//#define MAX_RECORDING_TIME 300000   // 5 minutes maximum recording time (optional)
-//#define MOTION_CHECK_INTERVAL 5000  // Check motion every 5 seconds
-//#define COOLDOWN_PERIOD 5000        // 5-second cooldown for saving files
-
 #endif
 
 #if !CONFIG_IDF_TARGET_ESP32S3 && !CONFIG_IDF_TARGET_ESP32
 #error "Must select ESP32 or ESP32S3 board"
 #endif
 
+
+
+//***The "Camera Switch" ***
+#define USE_OV5640 true  // Set to false to use OV2640 instead
+
+#if USE_OV5640
+
+#else
+static unsigned long COOLDOWN_DURATION = 5000;  // 5 seconds for OV2640
+#endif
 /**************************************************************************
  Uncomment one only of the ESP32 or ESP32S3 camera models in the block below
  Selecting wrong model may crash your device due to pin conflict
 ***************************************************************************/
-
-
-
 
 // User's ESP32 cam board
 #if defined(CONFIG_IDF_TARGET_ESP32)

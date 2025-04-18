@@ -21,7 +21,9 @@
 
 #define FB_CNT 4 // number of frame buffers
 
-// user parameters set from web
+
+static bool setupCameraConfig(); // Forward declaration
+
 //*bool useMotion  = true; // whether to use camera for motion detection (with motionDetect.cpp)
 bool dbgMotion  = false;
 bool forceRecord = false; // Recording enabled by rec button
@@ -424,6 +426,8 @@ static bool closeAvi() {
 //*enum RecordState { IDLE, RECORDING, COOLDOWN };
 //*RecordState recordState = IDLE;
 
+
+
 static uint32_t recordingStartTime = 0; // Tracks when recording started (in milliseconds)
 //unsigned long recordStartTime = 0;
 
@@ -434,11 +438,12 @@ const unsigned long RECORD_DURATION = 60000; // 60 seconds
 const uint32_t MIN_RECORDING_TIME = 60 * 1000;  // 60 seconds minimum recording time (changed from 30)
 const uint32_t MAX_RECORDING_TIME = 5 * 60 * 1000; // 5 minutes maximum recording time
 
-const uint32_t COOLDOWN_DURATION = 5 * 1000; // 5 seconds cooldown for saving files
-//const unsigned long COOLDOWN_DURATION = 5000; // 5 seconds
 
-
-
+#if USE_OV5640
+unsigned long COOLDOWN_DURATION = 10 * 1000; // 10 seconds for OV5640
+#else
+unsigned long COOLDOWN_DURATION = 5 * 1000;  // 5 seconds for OV2640
+#endif
 
 void startRecording() {
     Serial.println("Starting recording...");
@@ -453,163 +458,136 @@ void stopRecording() {
     vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 
-static boolean processFrame() {
-  // Static variables for state tracking
-  static uint32_t recordingStartTime = 0;
-  static uint32_t lastMotionCheckTime = 0;
-  static bool wasRecording = false;  // Add this variable
-  bool res = true;
-  
-  camera_fb_t* fb = esp_camera_fb_get();
-  if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) return false;
-  
-  // Always process timelapse, regardless of state
-  timeLapse(fb);
-  
-  // Handle streaming buffers
-  for (int i = 0; i < vidStreams; i++) {
-    if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
-      memcpy(streamBuffer[i], fb->buf, fb->len);
-      streamBufferSize[i] = fb->len;   
-      xSemaphoreGive(frameSemaphore[i]);
-    }
+
+
+static bool setupCameraConfig() {
+  // Before changing camera settings, stop any active timers
+  controlFrameTimer(false);  // Stop frame timer
+
+  sensor_t* s = esp_camera_sensor_get();
+  if (!s) return false;
+
+#if USE_OV5640
+  // OV5640 Configuration
+  if (s->id.PID != OV5640_PID) {
+    LOG_WRN("Expected OV5640 camera but found different sensor ID: %d", s->id.PID);
+    return false;
   }
   
-  // Handle manual frame requests
-  if (doKeepFrame) {
-    keepFrame(fb);
-    doKeepFrame = false;
+  LOG_INF("Setting up OV5640 camera");
+  
+  // Resolution settings based on recording state
+  if (recordState == IDLE) {
+    // Monitoring mode: 720p at 10FPS
+    s->set_framesize(s, FRAMESIZE_HD);
+    FPS = 10;  // Don't call setFPS directly yet
+    maxFrameBuffSize = frameData[FRAMESIZE_HD].frameWidth * frameData[FRAMESIZE_HD].frameHeight / 4;
+  } else {
+    // Recording mode: 1080p at 15FPS
+    s->set_framesize(s, FRAMESIZE_FHD);
+    FPS = 15;  // Don't call setFPS directly yet
+    maxFrameBuffSize = frameData[FRAMESIZE_FHD].frameWidth * frameData[FRAMESIZE_FHD].frameHeight / 4;
   }
   
-  // Track manual recording state changes
-  if (forceRecord && !wasRecording) wasRecording = true;
-  else if (!forceRecord && wasRecording) wasRecording = false;
+  // Quality settings
+  s->set_quality(s, 12);
   
-  // State machine for recording
-  switch (recordState) {
-    case IDLE:
-      // In IDLE state, check for motion
-      if (useMotion) {
-        // Check motion detection
-        bool motionDetected = checkMotion(fb, false, false);
-        motionTriggeredAudio = motionDetected;
-        
-        if (motionDetected || forceRecord) {
-          // Motion detected or manual recording requested, start recording
-          LOG_INF("Capture started by %s", motionDetected ? "Motion" : "Button");
-          Serial.println("Started recording due to motion/manual trigger");
-          
-          stopPlaying(); // terminate any playback
-          stopPlayback = true; // stop any subsequent playback
-          
-          // Start recording
-          openAvi();
-          recordingStartTime = millis();
-          recordState = RECORDING;
-          isCapturing = true;
-          
-#if INCLUDE_MQTT
-          if (mqtt_active) {
-            sprintf(jsonBuff, "{\"RECORD\":\"ON\", \"TIME\":\"%s\"}", esp_log_system_timestamp());
-            mqttPublish(jsonBuff);
-            mqttPublishPath("record", "on");
-          }
-#endif
-#if INCLUDE_PERIPH
-          buzzerAlert(true); // sound buzzer if enabled
-#endif
-        }
-      }
-      break;
-      
-    case RECORDING:
-      {
-        uint32_t recordingDuration = millis() - recordingStartTime;
-        
-        // Save the current frame
-        saveFrame(fb);
-        
-        // Check if we need to finish recording
-        bool finishRecording = false;
-        
-        // Always record for at least MIN_RECORDING_TIME (60 seconds)
-        if (recordingDuration >= MIN_RECORDING_TIME) {
-          // We've recorded for minimum time, check if we should stop
-          
-          // Check motion periodically if we're past minimum recording time
-          if (millis() - lastMotionCheckTime > MOTION_CHECK_INTERVAL) {
-            lastMotionCheckTime = millis();
-            
-            // Check if motion is still happening
-            bool motionStillActive = checkMotion(fb, true, false);
-            
-            if (!motionStillActive && !forceRecord) {
-              // No more motion and not manually recording - finish recording
-              Serial.println("Motion stopped, finishing recording");
-              finishRecording = true;
-            } else if (motionStillActive) {
-              // Motion still active, continue recording
-              Serial.println("Motion continues, extending recording");
-            }
-          }
-          
-          // Also check if we've reached maximum recording time
-          if (recordingDuration >= MAX_RECORDING_TIME) {
-            Serial.println("Reached maximum recording time, finishing recording");
-            finishRecording = true;
-          }
-          
-          // Check frame count (another safety limit)
-          if (frameCnt >= maxFrames) {
-            LOG_INF("Auto closed recording after %u frames", maxFrames);
-            finishRecording = true;
-          }
-        }
-        
-        // If manual recording stop requested
-        if (forceRecord == false && wasRecording == true) {
-          finishRecording = true;
-          wasRecording = false;
-        }
-        
-        if (finishRecording) {
-          // Finish the recording and transition to COOLDOWN
-          recordState = COOLDOWN;
-          recordingStartTime = millis(); // Reuse for cooldown timer
-          
-#if INCLUDE_PERIPH
-          if (lampAuto) setLamp(0); // switch off lamp
-          buzzerAlert(false); // switch off buzzer
-#endif
-        }
-      }
-      break;
-      
-    case COOLDOWN:
-      {
-        // In cooldown state - waiting for file save to complete
-        if (millis() - recordingStartTime >= COOLDOWN_DURATION) {
-          // Cooldown period complete, save the file and return to IDLE
-          if (stopPlayback) {
-            closeAvi();  // This saves the file
-          }
-          
-          Serial.println("Cooldown complete, returning to IDLE");
-          recordState = IDLE;
-          lastMotionCheckTime = 0;
-          
-          // Reset state variables
-          isCapturing = false;
-          stopPlayback = false;
-        }
-      }
-      break;
+  // Other OV5640-specific settings
+  s->set_brightness(s, 0);
+  s->set_contrast(s, 0);
+  s->set_saturation(s, 0);
+  s->set_special_effect(s, 0);
+  s->set_wb_mode(s, 0);
+  s->set_whitebal(s, 1);
+  s->set_awb_gain(s, 1);
+  s->set_exposure_ctrl(s, 1);
+  
+#else
+  // OV2640 Configuration
+  if (s->id.PID != OV2640_PID) {
+    LOG_WRN("Expected OV2640 camera but found different sensor ID: %d", s->id.PID);
+    return false;
   }
   
-  // Always return the frame buffer when done
-  esp_camera_fb_return(fb);
-  return res;
+  LOG_INF("Setting up OV2640 camera");
+  
+  // Use existing framesize from configs
+  char fszPtr[4];
+  if (retrieveConfigVal("framesize", fszPtr)) s->set_framesize(s, (framesize_t)(atoi(fszPtr)));
+  else s->set_framesize(s, FRAMESIZE_SVGA);
+  
+  // Keep original FPS
+#endif
+
+  // Now restart frame timer with new settings
+  setFPS(FPS);  // This will call controlFrameTimer(true)
+  
+  return true;
 }
+
+
+void processFrame() {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+        Serial.println("Camera capture failed");
+        return;
+    }
+
+    // If transitioning between states, update camera settings
+    static RecordState previousState = IDLE;
+    if (previousState != recordState) {
+        setupCameraConfig(); // Apply appropriate camera settings for current state
+        previousState = recordState;
+    }
+
+    if (useMotion && recordState == IDLE) {
+        bool motionDetected = checkMotion(fb, false, false);
+        if (motionDetected) {
+            recordState = RECORDING;
+            recordingStartTime = millis(); // Fixed variable name
+            // Start recording with new settings
+            setupCameraConfig(); // Apply recording settings
+            startRecording();
+            Serial.println("Motion detected! Recording started.");
+        }
+    }
+
+    if (recordState == RECORDING) {
+        // Check if recording time has exceeded minimum
+        if (millis() - recordingStartTime >= MIN_RECORDING_TIME) { // Fixed variable name
+            // Check for continued motion every 5 seconds
+            if (millis() - lastMotionCheckTime >= MOTION_CHECK_INTERVAL) {
+                lastMotionCheckTime = millis();
+                bool continuedMotion = checkMotion(fb, true, false);
+                if (continuedMotion) {
+                    Serial.println("Motion continues, extending recording");
+                } else if (millis() - recordingStartTime >= MAX_RECORDING_TIME) { // Fixed variable name
+                    // Force stop if we hit maximum time
+                    stopRecording();
+                    recordState = COOLDOWN;
+                    recordingStartTime = millis(); // Fixed variable name
+                    setupCameraConfig(); // Apply monitoring settings
+                    Serial.println("Maximum recording time reached, entering cooldown.");
+                } else {
+                    stopRecording();
+                    recordState = COOLDOWN;
+                    recordingStartTime = millis(); // Fixed variable name
+                    setupCameraConfig(); // Apply monitoring settings
+                    Serial.println("Recording stopped, entering cooldown.");
+                }
+            }
+        }
+    } else if (recordState == COOLDOWN) {
+        if (millis() - recordingStartTime >= COOLDOWN_DURATION) { // Fixed variable name
+            recordState = IDLE;
+            Serial.println("Cooldown ended, ready for new motion.");
+        }
+    }
+
+    esp_camera_fb_return(fb);
+}
+  
+
 
 /********************** plackback AVI as MJPEG ***********************/
 
@@ -987,6 +965,8 @@ static esp_err_t changeXCLK(camera_config_t config) {
   return res;
 }
 
+
+
 bool prepCam() {
     // Initialize camera depending on model and board
     if (FRAMESIZE_INVALID != sizeof(frameData) / sizeof(frameData[0])) 
@@ -1181,8 +1161,20 @@ bool prepCam() {
         fb = NULL;
         res = true;
         LOG_INF("Camera model %s ready @ %uMHz", camModel, xclkMhz); 
+    // Make sure capture task is created before setting up camera config
+    if (captureHandle == NULL) {
+       xTaskCreate(&captureTask, "captureTask", CAPTURE_STACK_SIZE, NULL, CAPTURE_PRI, &captureHandle);
+       }
+
+    // Now configure camera with appropriate settings
+    if (res) {
+        // Apply camera-specific configuration
+        res = setupCameraConfig();
+        }
     }
+
     
     debugMemory("prepCam");
     return res;
 }
+
