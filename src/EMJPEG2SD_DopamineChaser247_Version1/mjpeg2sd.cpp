@@ -48,6 +48,7 @@ int tlSecsBetweenFrames; // too short interval will interfere with other activit
 int tlDurationMins; // a new file starts when previous ends
 int tlPlaybackFPS;  // rate to playback the timelapse, min 1 
 
+
 // status & control fields
 uint8_t FPS = 0;
 //*bool nightTime = false;
@@ -62,6 +63,23 @@ static int siodGpio = SIOD_GPIO_NUM;
 static int siocGpio = SIOC_GPIO_NUM;
 size_t maxFrameBuffSize;
 framesize_t maxFS = FRAMESIZE_SVGA; // default
+
+uint8_t setFPS(uint8_t val) {
+  // change or retrieve FPS value
+  if (val) {
+    FPS = val;
+    // change frame timer which drives the task
+    controlFrameTimer(true);
+    saveFPS = FPS; // used to reset FPS after playback
+  }
+  return FPS;
+}
+
+uint8_t setFPSlookup(uint8_t val) {
+  // set FPS from framesize lookup
+  fsizePtr = val;
+  return setFPS(frameData[fsizePtr].defaultFPS);
+}
 
 // header and reporting info
 static uint32_t vidSize; // total video size
