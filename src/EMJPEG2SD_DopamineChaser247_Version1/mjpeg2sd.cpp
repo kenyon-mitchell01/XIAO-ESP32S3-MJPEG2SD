@@ -158,27 +158,37 @@ uint8_t setFPSlookup(uint8_t val) {
 
 static void openAvi() {
   // derive filename from date & time, store in date folder
-  // time to open a new file on SD increases with the number of files already present
   oTime = millis();
   dateFormat(partName, sizeof(partName), true);
   STORAGE.mkdir(partName); // make date folder if not present
   dateFormat(partName, sizeof(partName), false);
+  
   // open avi file with temporary name 
   aviFile = STORAGE.open(AVITEMP, FILE_WRITE);
   oTime = millis() - oTime;
   LOG_VRB("File opening time: %ums", oTime);
+  
+  // Force the resolution setting again just before recording starts
+  sensor_t* s = esp_camera_sensor_get();
+  if (s) {
+    s->set_framesize(s, recordState == RECORDING ? FRAMESIZE_FHD : FRAMESIZE_HD);
+    LOG_INF("AVI recording at resolution: %s", frameData[s->status.framesize].frameSizeStr);
+  }
+  
 #if INCLUDE_AUDIO
   startAudioRecord();
 #endif
 #if INCLUDE_TELEM
   haveSrt = startTelemetry();
 #endif
-  // initialisation of counters
+  
+  // initialization of counters
   startTime = millis();
   frameCnt = fTimeTot = wTimeTot = dTimeTot = vidSize = 0;
   highPoint = AVI_HEADER_LEN; // allot space for AVI header
   prepAviIndex();
 }
+
 
 static inline bool doMonitor(bool capturing) {
   // monitor incoming frames for motion 
@@ -188,7 +198,7 @@ static inline bool doMonitor(bool capturing) {
   if (!checkRate) checkRate = 1;
   if (++motionCnt/checkRate) motionCnt = 0; // time to check for motion
   return !(bool)motionCnt;
-}  
+}
 
 static void timeLapse(camera_fb_t* fb, bool tlStop = false) {
   // record a time lapse avi
@@ -271,6 +281,7 @@ static void timeLapse(camera_fb_t* fb, bool tlStop = false) {
   } else frameCntTL = intervalCnt = 0;
 }
 
+
 void keepFrame(camera_fb_t* fb) {
   // keep required frame for external server alert
   if (fb->len < maxFrameBuffSize && alertBuffer != NULL) {
@@ -280,15 +291,31 @@ void keepFrame(camera_fb_t* fb) {
 }
 
 static void saveFrame(camera_fb_t* fb) {
-  // save frame on SD card
-  uint32_t fTime = millis();
-  // align end of jpeg on 4 byte boundary for AVI
-  uint16_t filler = (4 - (fb->len & 0x00000003)) & 0x00000003; 
-  size_t jpegSize = fb->len + filler;
-  // add avi frame header
-  memcpy(iSDbuffer+highPoint, dcBuf, 4); 
-  memcpy(iSDbuffer+highPoint+4, &jpegSize, 4);
-  highPoint += CHUNK_HDR;
+    // save frame on SD card
+    uint32_t fTime = millis();
+    // align end of jpeg on 4 byte boundary for AVI
+    uint16_t filler = (4 - (fb->len & 0x00000003)) & 0x00000003; 
+    size_t jpegSize = fb->len + filler;
+    // add avi frame header
+    memcpy(iSDbuffer+highPoint, dcBuf, 4); 
+    memcpy(iSDbuffer+highPoint+4, &jpegSize, 4);
+    highPoint += CHUNK_HDR;
+    
+  //New code added for optimization
+    // Minimize SD writes by buffering more data
+    static uint32_t writeCounter = 0;
+    writeCounter++;
+    // Only write to SD every 4 frames to reduce I/O overhead
+  if (highPoint >= RAMSIZE || writeCounter % 4 == 0) {
+    uint32_t wTime = millis();
+    aviFile.write(iSDbuffer, highPoint);
+    wTime = millis() - wTime;
+    wTimeTot += wTime;
+    LOG_VRB("SD storage time %u ms", wTime);
+    highPoint = 0;
+  }
+  //End of new code written for optimization
+
   if (highPoint >= RAMSIZE) {
     // marker overflows buffer
     highPoint -= RAMSIZE;
@@ -320,12 +347,12 @@ static void saveFrame(camera_fb_t* fb) {
   fTimeTot += fTime;
   LOG_VRB("Frame processing time %u ms", fTime);
   LOG_VRB("============================");
-  // Inside saveFrame() function, after saving frame
-  static uint32_t frameCount = 0;
-  if (frameCount % 30 == 0) {  // Log every 30 frames
-  Serial.printf("Saved frame %u, size: %u bytes\n", frameCount, jpegSize);
+  
+  static uint32_t lastFrameLog = 0;
+  if (frameCnt % 30 == 0) {
+    size_t jpegSize = fb->len + filler;
+    LOG_VRB("Saved frame %u, size: %u bytes", frameCnt, jpegSize);
   }
-  frameCount++;
 }
 
 static bool closeAvi() {
@@ -485,8 +512,6 @@ void stopRecording() {
     Serial.printf("File save took %lu ms\n", millis() - startTime);
 }
 
-
-
 static bool setupCameraConfig() {
   // Before changing camera settings, stop any active timers
   controlFrameTimer(false);  // Stop frame timer
@@ -508,95 +533,134 @@ static bool setupCameraConfig() {
     // Monitoring mode: 720p at 10FPS
     s->set_framesize(s, FRAMESIZE_HD);
     FPS = 10;
-  } else if (recordState == RECORDING) {
-    // Recording mode: 1080p at 15FPS
-    s->set_framesize(s, FRAMESIZE_FHD);
-    FPS = 15;
-  }
-  
-  // Recalculate buffer sizes based on new resolution
-  if (recordState == IDLE || recordState == COOLDOWN) {
     maxFrameBuffSize = frameData[FRAMESIZE_HD].frameWidth * frameData[FRAMESIZE_HD].frameHeight / 4;
-  } else {
+  } else if (recordState == RECORDING) {
+    // Recording mode: 1080p at 10FPS (reduced from 15 for stability)
+    s->set_framesize(s, FRAMESIZE_FHD);
+    FPS = 10;
     maxFrameBuffSize = frameData[FRAMESIZE_FHD].frameWidth * frameData[FRAMESIZE_FHD].frameHeight / 4;
   }
   
-  // Quality settings (lower number = higher quality)
-  s->set_quality(s, 12);
+  // Higher quality for recording, lower for monitoring
+  if (recordState == RECORDING) {
+    s->set_quality(s, 10);  // Better quality for recording (lower value = higher quality)
+  } else {
+    s->set_quality(s, 15);  // Lower quality for monitoring
+  }
   
-  // Restart frame timer with new settings
+  // OV5640-specific optimizations for better performance
+  s->set_saturation(s, 0);
+  s->set_brightness(s, 0);
+  s->set_contrast(s, 0);
+  s->set_whitebal(s, 1);
+  s->set_awb_gain(s, 1);
+  s->set_exposure_ctrl(s, 1);
+  
+  // Restart frame timer with new settings after a small delay to allow camera to stabilize
+  delay(100);
   setFPS(FPS);  // This will restart the timer
   
   return true;
 }
 
+// Modify processFrame to reduce processing time
 void processFrame() {
-    static RecordState previousState = IDLE;
-    static bool cameraConfigured = false;
-    
-    // Get a frame from the camera
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-        Serial.println("Camera capture failed");
-        return;
+  static RecordState previousState = IDLE;
+  static uint32_t frameCount = 0;
+  
+  // Get a frame from the camera
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Camera capture failed");
+    return;
+  }
+  
+  // Only check for motion on every Nth frame when in IDLE state to reduce CPU load
+  if (recordState == IDLE) {
+    frameCount++;
+    if (frameCount % 3 == 0 && useMotion) {  // Check every 3rd frame
+      bool motionDetected = checkMotion(fb, false, false);
+      if (motionDetected) {
+        recordState = RECORDING;
+        recordingStartTime = millis();
+        lastMotionCheckTime = millis();
+        startRecording();
+        Serial.println("Motion detected! Recording started.");
+        previousState = IDLE;  // Force camera reconfiguration
+      }
     }
-    
-    // Check if we need to reconfigure camera for state change
-    if (previousState != recordState) {
-        Serial.printf("State changed from %d to %d\n", previousState, recordState);
-        setupCameraConfig();  // Apply appropriate camera settings for current state
-        previousState = recordState;
-        cameraConfigured = true;
-    }
+  } 
+  
 
-    // Process frame based on current state
-    if (useMotion && recordState == IDLE) {
-        bool motionDetected = checkMotion(fb, false, false);
-        if (motionDetected) {
-            recordState = RECORDING;
-            recordingStartTime = millis();
-            lastMotionCheckTime = millis();
-            startRecording();
-            Serial.println("Motion detected! Recording started.");
-        }
-    } else if (recordState == RECORDING) {
-        // Save the current frame to the recording
-        saveFrame(fb);
+
+/*void processFrame() {
+  static RecordState previousState = IDLE;
+  static uint32_t frameCount = 0;
+  
+  // Get a frame from the camera
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    Serial.println("Camera capture failed");
+    return;
+  }
+  
+  // Check if we need to reconfigure camera for state change
+  if (previousState != recordState) {
+    Serial.printf("State changed from %d to %d\n", previousState, recordState);
+    setupCameraConfig();  // Apply appropriate camera settings for current state
+    previousState = recordState;
+  }
+  
+  // Process frame based on current state
+  if (recordState == IDLE) {
+    frameCount++;
+    if (frameCount % 3 == 0 && useMotion) {  // Check every 3rd frame
+      bool motionDetected = checkMotion(fb, false, false);
+      if (motionDetected) {
+        recordState = RECORDING;
+        recordingStartTime = millis();
+        lastMotionCheckTime = millis();
+        startRecording();
+        Serial.println("Motion detected! Recording started.");
+      }
+    }
+  } else if (recordState == RECORDING) {
+    // Save the current frame to the recording
+    saveFrame(fb);
+    
+    // Check if recording time has exceeded minimum
+    if (millis() - recordingStartTime >= MIN_RECORDING_TIME) {
+      // Check for continued motion every MOTION_CHECK_INTERVAL
+      if (millis() - lastMotionCheckTime >= MOTION_CHECK_INTERVAL) {
+        lastMotionCheckTime = millis();
+        bool continuedMotion = checkMotion(fb, true, false);
         
-        // Check if recording time has exceeded minimum
-        if (millis() - recordingStartTime >= MIN_RECORDING_TIME) {
-            // Check for continued motion every MOTION_CHECK_INTERVAL
-            if (millis() - lastMotionCheckTime >= MOTION_CHECK_INTERVAL) {
-                lastMotionCheckTime = millis();
-                bool continuedMotion = checkMotion(fb, true, false);
-                
-                if (continuedMotion) {
-                    Serial.println("Motion continues, extending recording");
-                } else if (millis() - recordingStartTime >= MAX_RECORDING_TIME) {
-                    // Force stop if we hit maximum time
-                    stopRecording();
-                    recordState = COOLDOWN;
-                    recordingStartTime = millis();
-                    Serial.println("Maximum recording time reached, entering cooldown.");
-                } else {
-                    stopRecording();
-                    recordState = COOLDOWN;
-                    recordingStartTime = millis();
-                    Serial.println("Recording stopped, entering cooldown.");
-                }
-            }
+        if (continuedMotion) {
+          Serial.println("Motion continues, extending recording");
+        } else if (millis() - recordingStartTime >= MAX_RECORDING_TIME) {
+          // Force stop if we hit maximum time
+          stopRecording();
+          recordState = COOLDOWN;
+          recordingStartTime = millis();
+          Serial.println("Maximum recording time reached, entering cooldown.");
+        } else {
+          stopRecording();
+          recordState = COOLDOWN;
+          recordingStartTime = millis();
+          Serial.println("Recording stopped, entering cooldown.");
         }
-    } else if (recordState == COOLDOWN) {
-        if (millis() - recordingStartTime >= COOLDOWN_DURATION) {
-            recordState = IDLE;
-            Serial.println("Cooldown ended, ready for new motion.");
-        }
+      }
     }
+  } else if (recordState == COOLDOWN) {
+    if (millis() - recordingStartTime >= COOLDOWN_DURATION) {
+      recordState = IDLE;
+      Serial.println("Cooldown ended, ready for new motion.");
+    }
+  }
 
-    // Release the frame buffer
-    esp_camera_fb_return(fb);
-}
-
+  // Release the frame buffer
+  esp_camera_fb_return(fb);
+}*/ // Make sure this closing brace exists
 
 
 /********************** plackback AVI as MJPEG ***********************/

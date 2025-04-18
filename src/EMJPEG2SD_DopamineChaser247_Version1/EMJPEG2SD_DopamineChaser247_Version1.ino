@@ -110,16 +110,28 @@ void setup() {
 }
 
 void loop() {
-  // confirm not blocked in setup
-  LOG_INF("=============== Total tasks: %u ===============\n", uxTaskGetNumberOfTasks() - 1);
+  // Reset watchdog timer every loop iteration
+  esp_task_wdt_reset();
+  
+  // Log system status periodically
+  static unsigned long lastStatusTime = 0;
+  if (millis() - lastStatusTime > 60000) {  // Every minute
+    LOG_INF("System running, state: %s, heap: %u, PSRAM: %u", 
+            recordState == IDLE ? "IDLE" : 
+            recordState == RECORDING ? "RECORDING" : "COOLDOWN",
+            ESP.getFreeHeap(),
+            ESP.getFreePsram());
+    lastStatusTime = millis();
+  }
+  
+  // Check for file uploads
   unsigned long now = millis();
   if (now - lastUpload > uploadInterval) {
     uploadRecordings();
     lastUpload = now;
   }
+  
   delay(1000);
-
-  vTaskDelete(NULL);
 }
 
 // Add this to EMJPEG2SD_DopamineChaser247_Version1.ino
