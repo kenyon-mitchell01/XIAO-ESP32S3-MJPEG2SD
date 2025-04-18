@@ -235,9 +235,9 @@
 #define SD_MMC_CLK 7 
 #define SD_MMC_CMD 9
 #define SD_MMC_D0 8
-#define SD_MMC_D1 4  // Added for 4-bit mode   
-#define SD_MMC_D2 5  // Added for 4-bit mode
-#define SD_MMC_D3 6  // Added for 4-bit mode
+//#define SD_MMC_D1 4  // Added for 4-bit mode   
+//#define SD_MMC_D2 5  // Added for 4-bit mode
+//#define SD_MMC_D3 6  // Added for 4-bit mode
 
 // Define Mic Pins
 #define I2S_SD 41 // PDM Microphone

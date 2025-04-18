@@ -61,20 +61,25 @@ bool testSDCard() {
         return false;
     }
     
-    // Write 100KB of test data
-    const int bufSize = 1024;
-    char testBuf[bufSize];
-    memset(testBuf, 'A', bufSize-1);
-    testBuf[bufSize-1] = '\0';
+    // Write 1MB of test data for more accurate measurement
+    const int bufSize = 4096; // 4KB chunks for better performance
+    uint8_t* testBuf = (uint8_t*)malloc(bufSize);
+    if (!testBuf) {
+        Serial.println("Failed to allocate test buffer");
+        testFile.close();
+        return false;
+    }
     
-    const int writeCount = 100; // 100 KB total
+    memset(testBuf, 0xAA, bufSize); // Pattern of alternating bits
+    
+    const int writeCount = 256; // 256 * 4KB = 1MB total
     size_t totalBytesWritten = 0;
     
     for (int i = 0; i < writeCount; i++) {
-        size_t bytesWritten = testFile.print(testBuf);
+        size_t bytesWritten = testFile.write(testBuf, bufSize);
         totalBytesWritten += bytesWritten;
-        if (bytesWritten != bufSize-1) {
-            Serial.printf("Write incomplete: %d of %d bytes\n", bytesWritten, bufSize-1);
+        if (bytesWritten != bufSize) {
+            Serial.printf("Write incomplete: %d of %d bytes\n", bytesWritten, bufSize);
             break;
         }
     }
@@ -88,13 +93,13 @@ bool testSDCard() {
     testFile = SD_MMC.open(testFilename, FILE_READ);
     if (!testFile) {
         Serial.println("Failed to open test file for reading");
+        free(testBuf);
         return false;
     }
     
     size_t totalBytesRead = 0;
     while (testFile.available()) {
-        char readBuf[bufSize];
-        size_t bytesRead = testFile.readBytes(readBuf, bufSize-1);
+        size_t bytesRead = testFile.read(testBuf, bufSize);
         totalBytesRead += bytesRead;
         if (bytesRead == 0) break;
     }
@@ -105,9 +110,10 @@ bool testSDCard() {
     
     // Delete test file
     SD_MMC.remove(testFilename);
+    free(testBuf);
     
-    Serial.printf("SD Card Test Results:\n");
-    Serial.printf("- Write: %.2f KB/s (%u bytes in %u ms)\n", writeSpeed, totalBytesRead, writeTime);
+    Serial.printf("SD Card Performance Test Results:\n");
+    Serial.printf("- Write: %.2f KB/s (%u bytes in %u ms)\n", writeSpeed, totalBytesWritten, writeTime);
     Serial.printf("- Read: %.2f KB/s (%u bytes in %u ms)\n", readSpeed, totalBytesRead, readTime);
     
     return true;
@@ -121,61 +127,49 @@ static bool prepSD_MMC() {
     fileVec.reserve(1000);
     if (psramFound()) heap_caps_malloc_extmem_enable(MAX_RAM);
 #if CONFIG_IDF_TARGET_ESP32S3
-    #if !defined(SD_MMC_CLK)
-        LOG_WRN("SD card pins not defined");
-        Serial.println("SD card pins not defined - cannot initialize SD card");
-        return false;
-    #else
-        #if defined(SD_MMC_D1)
-            // 4-bit mode
-            Serial.println("Attempting 4-bit SD card mode with pins:");
-            Serial.printf("CLK: %d, CMD: %d, D0: %d, D1: %d, D2: %d, D3: %d\n", 
-                         SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
-            SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0, SD_MMC_D1, SD_MMC_D2, SD_MMC_D3);
-            use1bitMode = false;
-        #else
-            // 1-bit mode
-            Serial.println("Configuring SD card in 1-bit mode");
-            SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
-        #endif
-    #endif
+    Serial.println("Configuring SD card in 1-bit mode for XIAO ESP32-S3 Sense");
+    Serial.printf("SD card pins: CLK=%d (GPIO7), CMD=%d (GPIO9), D0=%d (GPIO8)\n", 
+                 SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+    
+    // XIAO ESP32-S3 uses GPIO21 for CS, but SD_MMC doesn't use CS directly
+    Serial.printf("Note: GPIO21 used for CS (not directly configured in SD_MMC)\n");
+    
+    // Update default frequency to optimize 1-bit mode
+    sdmmcFreq = 25000000; // Try 25MHz for better performance
+    
+    // Configure pins for 1-bit mode
+    SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
+    use1bitMode = true;
 #endif
 
-    // Try to mount with 4-bit mode first if defined
-    if (!use1bitMode) {
-        Serial.println("Trying 4-bit SD card mode...");
-        // Start with a lower frequency for 4-bit mode
-        res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, 20000000); // 20MHz
+    // Try different frequencies for optimal performance
+    uint32_t testFreqs[] = {25000000, 20000000, 16000000, 12000000}; // 25MHz, 20MHz, 16MHz, 12MHz
+    bool success = false;
+    
+    // Try different frequencies to find the fastest stable one
+    for (uint8_t i = 0; i < sizeof(testFreqs)/sizeof(testFreqs[0]) && !success; i++) {
+        Serial.printf("Trying 1-bit mode with %d MHz clock...\n", testFreqs[i]/1000000);
+        res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, testFreqs[i]);
         
-        if (!res) {
-            Serial.println("4-bit mode failed with 20MHz clock, trying 10MHz...");
-            res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, 10000000); // 10MHz
-        }
-        
-        if (!res) {
-            Serial.println("4-bit mode failed. Falling back to 1-bit mode...");
-            use1bitMode = true;
-            SD_MMC.setPins(SD_MMC_CLK, SD_MMC_CMD, SD_MMC_D0);
-        } else {
-            Serial.println("4-bit SD card mode successfully initialized");
+        if (res) {
+            sdmmcFreq = testFreqs[i]; // Save the successful frequency
+            success = true;
+            Serial.printf("SD card initialized successfully at %d MHz\n", testFreqs[i]/1000000);
         }
     }
     
-    // Try 1-bit mode if 4-bit failed or was not defined
-    if (use1bitMode) {
-        Serial.println("Initializing SD card in 1-bit mode...");
-        res = SD_MMC.begin("/sdcard", use1bitMode, formatIfMountFailed, sdmmcFreq);
-    }
-    
-    if (res) {
-        Serial.printf("SD card mounted successfully in %s mode\n", use1bitMode ? "1-bit" : "4-bit");
+    if (success) {
+        Serial.printf("SD card mounted successfully in 1-bit mode at %d MHz\n", sdmmcFreq/1000000);
         fp.mkdir(DATA_DIR);
         infoSD();
-        testSDCard(); // Test SD card functionality
+        
+        // Test SD card performance with optimized clock
+        testSDCard();
+        
         res = true;
     } else {
-        LOG_WRN("SD card mount failed");
-        Serial.println("SD card mount failed - check your wiring and card");
+        LOG_WRN("SD card mount failed at all tested frequencies");
+        Serial.println("SD card mount failed - check wiring and card");
         res = false;
     }
 #endif
