@@ -8,6 +8,10 @@
 #ifndef APP_GLOBALS_H
 #define APP_GLOBALS_H
 
+//#define MIN_RECORDING_TIME 60000    // 60 seconds minimum recording time
+//#define MAX_RECORDING_TIME 300000   // 5 minutes maximum recording time (optional)
+//#define MOTION_CHECK_INTERVAL 5000  // Check motion every 5 seconds
+//#define COOLDOWN_PERIOD 5000        // 5-second cooldown for saving files
 
 #endif
 
@@ -19,6 +23,9 @@
  Uncomment one only of the ESP32 or ESP32S3 camera models in the block below
  Selecting wrong model may crash your device due to pin conflict
 ***************************************************************************/
+
+
+
 
 // User's ESP32 cam board
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -314,11 +321,13 @@ extern float motionVal;    // Motion sensitivity (% of changed pixels)
 extern uint8_t colorDepth; // Camera color depth (bits)
 extern uint8_t nightSwitch; // White level % for night/day switching
 extern uint8_t lightLevel;  // Light level for night mode detection
-extern bool motionTriggeredAudio; // Flag for audio triggered by motion
+
 extern bool useMotion;     // Enable/disable motion detection
 
+// Variables for state machine
 enum RecordState { IDLE, RECORDING, COOLDOWN };
 extern RecordState recordState;
+extern bool motionTriggeredAudio; // Flag for audio triggered by motion
 
 extern uint8_t minSeconds;     // Minimum recording duration
 extern bool stopPlayback;  // Flag to stop playback

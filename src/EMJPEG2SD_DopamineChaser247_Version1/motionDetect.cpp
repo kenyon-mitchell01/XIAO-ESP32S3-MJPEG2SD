@@ -168,7 +168,8 @@ static bool tinyMLclassify() {
 #endif
 
 bool checkMotion(camera_fb_t* fb, bool motionStatus, bool lightLevelOnly) {
-  if (recordState != IDLE) return false; // Skip during RECORDING or COOLDOWN
+  // Skip motion detection during COOLDOWN state
+  if (recordState != IDLE && recordState != RECORDING) return false;
   // check difference between current and previous image (subtract background)
   // convert image from JPEG to downscaled RGB888 or 8 bit grayscale bitmap
   if (fsizePtr > FRAMESIZE_SXGA) return false;

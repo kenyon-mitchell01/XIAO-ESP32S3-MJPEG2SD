@@ -19,19 +19,12 @@
 #define MAX_RECORDING_TIME_MS (5 * 60 * 1000)     // 5 minutes maximum
 #define COOLDOWN_TIME_MS (5 * 1000)               // 5 seconds cooldown
 
-static uint32_t recordingStartTime = 0; // Tracks when recording started (in milliseconds)
-const uint32_t MIN_RECORDING_TIME = 30 * 1000; // 30 seconds minimum recording time
-const uint32_t MAX_RECORDING_TIME = 5 * 60 * 1000; // 5 minutes maximum recording time
-const uint32_t MOTION_CHECK_INTERVAL = 5 * 1000; // Check motion every 5 seconds
-static uint32_t lastMotionCheckTime = 0; // Tracks the last time motion was checked
-
 #define FB_CNT 4 // number of frame buffers
 
 // user parameters set from web
 //*bool useMotion  = true; // whether to use camera for motion detection (with motionDetect.cpp)
 bool dbgMotion  = false;
 bool forceRecord = false; // Recording enabled by rec button
-
 bool captureMotion = false; // Ensure global scope, Added by Grok's suggestion 04/15/2025
 extern bool motionTriggeredAudio; // Declaration, not a definition
 
@@ -430,9 +423,22 @@ static bool closeAvi() {
 //Debug for processFrame() to be shown in serial monitor 04-16-2025
 //*enum RecordState { IDLE, RECORDING, COOLDOWN };
 //*RecordState recordState = IDLE;
-unsigned long recordStartTime = 0;
+
+static uint32_t recordingStartTime = 0; // Tracks when recording started (in milliseconds)
+//unsigned long recordStartTime = 0;
+
+const uint32_t MOTION_CHECK_INTERVAL = 5 * 1000; // Check motion every 5 seconds
+static uint32_t lastMotionCheckTime = 0; // Tracks the last time motion was checked
+
 const unsigned long RECORD_DURATION = 60000; // 60 seconds
-const unsigned long COOLDOWN_DURATION = 5000; // 5 seconds
+const uint32_t MIN_RECORDING_TIME = 60 * 1000;  // 60 seconds minimum recording time (changed from 30)
+const uint32_t MAX_RECORDING_TIME = 5 * 60 * 1000; // 5 minutes maximum recording time
+
+const uint32_t COOLDOWN_DURATION = 5 * 1000; // 5 seconds cooldown for saving files
+//const unsigned long COOLDOWN_DURATION = 5000; // 5 seconds
+
+
+
 
 void startRecording() {
     Serial.println("Starting recording...");
@@ -447,174 +453,163 @@ void stopRecording() {
     vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 
-static void processFrame() {
-    // Get camera frame
-    camera_fb_t* fb = esp_camera_fb_get();
-    if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) {
-        Serial.println("Camera capture failed or invalid frame");
-        if (fb) esp_camera_fb_return(fb);
-        return;
+static boolean processFrame() {
+  // Static variables for state tracking
+  static uint32_t recordingStartTime = 0;
+  static uint32_t lastMotionCheckTime = 0;
+  static bool wasRecording = false;  // Add this variable
+  bool res = true;
+  
+  camera_fb_t* fb = esp_camera_fb_get();
+  if (fb == NULL || !fb->len || fb->len > maxFrameBuffSize) return false;
+  
+  // Always process timelapse, regardless of state
+  timeLapse(fb);
+  
+  // Handle streaming buffers
+  for (int i = 0; i < vidStreams; i++) {
+    if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
+      memcpy(streamBuffer[i], fb->buf, fb->len);
+      streamBufferSize[i] = fb->len;   
+      xSemaphoreGive(frameSemaphore[i]);
     }
-    
-    // Process the frame for time lapse if enabled
-    timeLapse(fb);
-    
-    // Make the frame available for streaming if needed
-    for (int i = 0; i < vidStreams; i++) {
-        if (!streamBufferSize[i] && streamBuffer[i] != NULL) {
-            memcpy(streamBuffer[i], fb->buf, fb->len);
-            streamBufferSize[i] = fb->len;   
-            xSemaphoreGive(frameSemaphore[i]); // signal frame ready for stream
-        }
-    }
-    
-    // Handle still image capture if requested
-    if (doKeepFrame) {
-        keepFrame(fb);
-        doKeepFrame = false;
-    }
-
-    // Current time for state transitions
-    uint32_t currentTime = millis();
-    bool motionDetected = false;
-    bool checkForMotion = false;
-    
-    // Determine when to check for motion
-    switch (recordState) {
-        case IDLE:
-            // In IDLE state, always check motion
-            checkForMotion = true;
-            break;
-            
-        case RECORDING:
-            // During recording, only check motion periodically
-            if (currentTime - lastMotionCheckTime >= (moveStopSecs * 1000)) {
-                checkForMotion = true;
-                lastMotionCheckTime = currentTime;
-            }
-            
-            // Check if we've exceeded maximum recording time
-            if (currentTime - recordingStartTime >= (minSeconds * 1000 * 10)) { // 10x min time as max
-                Serial.println("Max recording time reached, closing file");
-                closeAvi();
-                recordState = COOLDOWN;
-                recordingStartTime = currentTime; // Reuse as cooldown start time
-            }
-            break;
-            
-        case COOLDOWN:
-            // In COOLDOWN state, wait for cooldown period (5 seconds)
-            if (currentTime - recordingStartTime >= 5000) { // 5 second cooldown
-                Serial.println("Cooldown complete, returning to IDLE");
-                recordState = IDLE;
-            }
-            break;
-    }
-    
-    // Check for motion if needed
-    if (checkForMotion && useMotion) {
-        motionDetected = checkMotion(fb, recordState == RECORDING);
-        motionTriggeredAudio = motionDetected; // For audio recording
-        lastMotionCheckTime = currentTime;
-    } else if (!useMotion && checkForMotion) {
-        // Just calculate light level
-        checkMotion(fb, false, true);
-    }
-    
-#if INCLUDE_PERIPH  
-    bool pirDetected = false;
-    if (pirUse) {
-        pirDetected = getPIRval();
-        if (pirDetected && recordState == IDLE) {
-            // PIR detected motion
-            if (lampAuto && nightTime) setLamp(lampLevel);
-            notifyMotion(fb);
-        }
-    }
-#endif
-
-    // Determine if we should be recording
-    bool shouldRecord = motionDetected || forceRecord;
-#if INCLUDE_PERIPH
-    shouldRecord = shouldRecord || pirDetected;
-#endif
-    
-    // State machine transitions
-    switch (recordState) {
-        case IDLE:
-            if (shouldRecord) {
-                // Start recording
-                stopPlaying(); // terminate any playback
-                stopPlayback = true; // stop any subsequent playback
-                
-                LOG_ALT("Capture started by %s%s%s", 
-                       motionDetected ? "Motion " : "", 
-                       pirVal ? "PIR " : "",
-                       forceRecord ? "Button" : "");
-                       
+  }
+  
+  // Handle manual frame requests
+  if (doKeepFrame) {
+    keepFrame(fb);
+    doKeepFrame = false;
+  }
+  
+  // Track manual recording state changes
+  if (forceRecord && !wasRecording) wasRecording = true;
+  else if (!forceRecord && wasRecording) wasRecording = false;
+  
+  // State machine for recording
+  switch (recordState) {
+    case IDLE:
+      // In IDLE state, check for motion
+      if (useMotion) {
+        // Check motion detection
+        bool motionDetected = checkMotion(fb, false, false);
+        motionTriggeredAudio = motionDetected;
+        
+        if (motionDetected || forceRecord) {
+          // Motion detected or manual recording requested, start recording
+          LOG_INF("Capture started by %s", motionDetected ? "Motion" : "Button");
+          Serial.println("Started recording due to motion/manual trigger");
+          
+          stopPlaying(); // terminate any playback
+          stopPlayback = true; // stop any subsequent playback
+          
+          // Start recording
+          openAvi();
+          recordingStartTime = millis();
+          recordState = RECORDING;
+          isCapturing = true;
+          
 #if INCLUDE_MQTT
-                if (mqtt_active) {
-                    sprintf(jsonBuff, "{\"RECORD\":\"ON\", \"TIME\":\"%s\"}", 
-                           esp_log_system_timestamp());
-                    mqttPublish(jsonBuff);
-                    mqttPublishPath("record", "on");
-                }
+          if (mqtt_active) {
+            sprintf(jsonBuff, "{\"RECORD\":\"ON\", \"TIME\":\"%s\"}", esp_log_system_timestamp());
+            mqttPublish(jsonBuff);
+            mqttPublishPath("record", "on");
+          }
 #endif
-
 #if INCLUDE_PERIPH
-                buzzerAlert(true); // sound buzzer if enabled
+          buzzerAlert(true); // sound buzzer if enabled
 #endif
-                openAvi();
-                recordState = RECORDING;
-                recordingStartTime = currentTime;
-                lastMotionCheckTime = currentTime;
-                Serial.println("Started recording due to motion/manual trigger");
+        }
+      }
+      break;
+      
+    case RECORDING:
+      {
+        uint32_t recordingDuration = millis() - recordingStartTime;
+        
+        // Save the current frame
+        saveFrame(fb);
+        
+        // Check if we need to finish recording
+        bool finishRecording = false;
+        
+        // Always record for at least MIN_RECORDING_TIME (60 seconds)
+        if (recordingDuration >= MIN_RECORDING_TIME) {
+          // We've recorded for minimum time, check if we should stop
+          
+          // Check motion periodically if we're past minimum recording time
+          if (millis() - lastMotionCheckTime > MOTION_CHECK_INTERVAL) {
+            lastMotionCheckTime = millis();
+            
+            // Check if motion is still happening
+            bool motionStillActive = checkMotion(fb, true, false);
+            
+            if (!motionStillActive && !forceRecord) {
+              // No more motion and not manually recording - finish recording
+              Serial.println("Motion stopped, finishing recording");
+              finishRecording = true;
+            } else if (motionStillActive) {
+              // Motion still active, continue recording
+              Serial.println("Motion continues, extending recording");
             }
-            break;
-            
-        case RECORDING:
-            // Always save frames while in RECORDING state
-            saveFrame(fb);
-            
-            // Check if we should stop recording (no motion and min time reached)
-            if (!shouldRecord && (currentTime - recordingStartTime >= (minSeconds * 1000))) {
-                Serial.println("Motion stopped, finishing recording");
-                closeAvi();
-                recordState = COOLDOWN;
-                recordingStartTime = currentTime; // Reuse as cooldown start time
-                
+          }
+          
+          // Also check if we've reached maximum recording time
+          if (recordingDuration >= MAX_RECORDING_TIME) {
+            Serial.println("Reached maximum recording time, finishing recording");
+            finishRecording = true;
+          }
+          
+          // Check frame count (another safety limit)
+          if (frameCnt >= maxFrames) {
+            LOG_INF("Auto closed recording after %u frames", maxFrames);
+            finishRecording = true;
+          }
+        }
+        
+        // If manual recording stop requested
+        if (forceRecord == false && wasRecording == true) {
+          finishRecording = true;
+          wasRecording = false;
+        }
+        
+        if (finishRecording) {
+          // Finish the recording and transition to COOLDOWN
+          recordState = COOLDOWN;
+          recordingStartTime = millis(); // Reuse for cooldown timer
+          
 #if INCLUDE_PERIPH
-                if (lampAuto) setLamp(0); // switch off lamp
-                buzzerAlert(false); // switch off buzzer
+          if (lampAuto) setLamp(0); // switch off lamp
+          buzzerAlert(false); // switch off buzzer
 #endif
-            }
-            
-#if INCLUDE_PERIPH
-            // Turn off buzzer after the specified duration
-            if (buzzerUse && buzzerDuration > 0 && 
-                (currentTime - recordingStartTime) / 1000 >= buzzerDuration) {
-                buzzerAlert(false);
-            }
-#endif
-
-            // Check if we've hit the frame limit
-            if (frameCnt >= maxFrames) {
-                logLine();
-                LOG_INF("Auto closed recording after %u frames", maxFrames);
-                closeAvi();
-                recordState = COOLDOWN;
-                recordingStartTime = currentTime;
-                forceRecord = false; // Clear the force record flag
-            }
-            break;
-            
-        // COOLDOWN state handled above
-    }
-    
-    // Return the frame buffer to the camera
-    esp_camera_fb_return(fb);
+        }
+      }
+      break;
+      
+    case COOLDOWN:
+      {
+        // In cooldown state - waiting for file save to complete
+        if (millis() - recordingStartTime >= COOLDOWN_DURATION) {
+          // Cooldown period complete, save the file and return to IDLE
+          if (stopPlayback) {
+            closeAvi();  // This saves the file
+          }
+          
+          Serial.println("Cooldown complete, returning to IDLE");
+          recordState = IDLE;
+          lastMotionCheckTime = 0;
+          
+          // Reset state variables
+          isCapturing = false;
+          stopPlayback = false;
+        }
+      }
+      break;
+  }
+  
+  // Always return the frame buffer when done
+  esp_camera_fb_return(fb);
+  return res;
 }
-
 
 /********************** plackback AVI as MJPEG ***********************/
 
