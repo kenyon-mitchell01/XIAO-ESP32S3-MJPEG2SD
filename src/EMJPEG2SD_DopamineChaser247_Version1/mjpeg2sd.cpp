@@ -51,7 +51,7 @@ int tlPlaybackFPS;  // rate to playback the timelapse, min 1
 
 // status & control fields
 uint8_t FPS = 0;
-uint8_t saveFPS = 0; // used to reset FPS after playback
+
 
 //*bool nightTime = false;
 uint8_t fsizePtr; // index to frameData[]
@@ -66,43 +66,8 @@ static int siocGpio = SIOC_GPIO_NUM;
 size_t maxFrameBuffSize;
 framesize_t maxFS = FRAMESIZE_SVGA; // default
 
-void controlFrameTimer(bool restartTimer) {
-  // frame timer control
-  static hw_timer_t* frameTimer = NULL;
-  // stop current timer
-  if (frameTimer) {
-    timerDetachInterrupt(frameTimer); 
-    timerEnd(frameTimer);
-    frameTimer = NULL;
-  }
-  if (restartTimer) {
-    // (re)start timer interrupt for required framerate
-    frameTimer = timerBegin(OneMHz); 
-    if (frameTimer) {
-      uint32_t frameInterval = OneMHz / FPS; // in units of us 
-      LOG_VRB("Frame timer interval %ums for FPS %u", frameInterval/1000, FPS); 
-      timerAttachInterrupt(frameTimer, &frameISR);
-      timerAlarm(frameTimer, frameInterval, true, 0); // micro seconds
-    } else LOG_ERR("Failed to setup frameTimer");
-  }
-}
 
-uint8_t setFPS(uint8_t val) {
-  // change or retrieve FPS value
-  if (val) {
-    FPS = val;
-    // change frame timer which drives the task
-    controlFrameTimer(true);
-    saveFPS = FPS; // used to reset FPS after playback
-  }
-  return FPS;
-}
 
-uint8_t setFPSlookup(uint8_t val) {
-  // set FPS from framesize lookup
-  fsizePtr = val;
-  return setFPS(frameData[fsizePtr].defaultFPS);
-}
 
 // header and reporting info
 static uint32_t vidSize; // total video size
@@ -128,7 +93,8 @@ static char partName[FILE_NAME_LEN];
 static size_t readLen;
 static uint8_t recFPS;
 static uint32_t recDuration;
-static uint8_t saveFPS = 99;
+uint8_t saveFPS = 0; // used to reset FPS after playback
+//static uint8_t saveFPS = 99; Claude suggested I use the above SaveFPS definition
 bool doPlayback = false; // controls playback
 
 // task control
@@ -168,12 +134,29 @@ void controlFrameTimer(bool restartTimer) {
     // (re)start timer interrupt for required framerate
     frameTimer = timerBegin(OneMHz); 
     if (frameTimer) {
-      frameInterval = OneMHz / FPS; // in units of us 
+      uint32_t frameInterval = OneMHz / FPS; // in units of us 
       LOG_VRB("Frame timer interval %ums for FPS %u", frameInterval/1000, FPS); 
       timerAttachInterrupt(frameTimer, &frameISR);
       timerAlarm(frameTimer, frameInterval, true, 0); // micro seconds
     } else LOG_ERR("Failed to setup frameTimer");
   }
+}
+
+uint8_t setFPS(uint8_t val) {
+  // change or retrieve FPS value
+  if (val) {
+    FPS = val;
+    // change frame timer which drives the task
+    controlFrameTimer(true);
+    saveFPS = FPS; // used to reset FPS after playback
+  }
+  return FPS;
+}
+
+uint8_t setFPSlookup(uint8_t val) {
+  // set FPS from framesize lookup
+  fsizePtr = val;
+  return setFPS(frameData[fsizePtr].defaultFPS);
 }
 
 /**************** capture AVI  ************************/
